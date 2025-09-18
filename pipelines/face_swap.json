@@ -1,0 +1,57 @@
+{
+  "1": {
+    "inputs": {
+      "image": "{{SRC_FACE_URL}}",
+      "upload": "image"
+    },
+    "class_type": "LoadImage",
+    "_meta": {
+      "title": "Load Source Face"
+    }
+  },
+  "2": {
+    "inputs": {
+      "image": "{{TARGET_URL}}",
+      "upload": "image"
+    },
+    "class_type": "LoadImage",
+    "_meta": {
+      "title": "Load Target Image"
+    }
+  },
+  "3": {
+    "inputs": {
+      "lora_name": "{{LORA}}",
+      "strength_model": 1.0,
+      "strength_clip": 1.0
+    },
+    "class_type": "LoraLoader",
+    "_meta": {
+      "title": "Load LoRA Model"
+    }
+  },
+  "4": {
+    "inputs": {
+      "model": ["3", 0],
+      "source_image": ["1", 0],
+      "target_image": ["2", 0],
+      "blend_ratio": "{{BLEND}}",
+      "max_side": "{{MAX_SIDE}}"
+    },
+    "class_type": "FaceSwap",
+    "_meta": {
+      "title": "Face Swap Process"
+    }
+  },
+  "5": {
+    "inputs": {
+      "images": ["4", 0],
+      "filename_prefix": "face_swap_output",
+      "format": "{{OUTPUT_FORMAT}}"
+    },
+    "class_type": "SaveImage",
+    "_meta": {
+      "title": "Save Face Swapped Image"
+    }
+  }
+}

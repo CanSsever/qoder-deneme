@@ -1,0 +1,45 @@
+{
+  "1": {
+    "inputs": {
+      "image": "{{INPUT_URL}}",
+      "upload": "image"
+    },
+    "class_type": "LoadImage",
+    "_meta": {
+      "title": "Load Input Image"
+    }
+  },
+  "2": {
+    "inputs": {
+      "face_restore_model": "{{FACE_RESTORE}}",
+      "enhance": "{{ENHANCE}}",
+      "max_side": "{{MAX_SIDE}}",
+      "denoise": "{{DENOISE}}"
+    },
+    "class_type": "FaceRestoreModel",
+    "_meta": {
+      "title": "Face Restore Settings"
+    }
+  },
+  "3": {
+    "inputs": {
+      "images": ["1", 0],
+      "model": ["2", 0]
+    },
+    "class_type": "FaceRestore",
+    "_meta": {
+      "title": "Face Restoration Process"
+    }
+  },
+  "4": {
+    "inputs": {
+      "images": ["3", 0],
+      "filename_prefix": "face_restore_output",
+      "format": "{{OUTPUT_FORMAT}}"
+    },
+    "class_type": "SaveImage",
+    "_meta": {
+      "title": "Save Restored Image"
+    }
+  }
+}

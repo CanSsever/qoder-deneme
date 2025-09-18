@@ -1,0 +1,44 @@
+{
+  "1": {
+    "inputs": {
+      "image": "{{INPUT_URL}}",
+      "upload": "image"
+    },
+    "class_type": "LoadImage",
+    "_meta": {
+      "title": "Load Input Image"
+    }
+  },
+  "2": {
+    "inputs": {
+      "upscale_model": "{{MODEL}}",
+      "scale_factor": "{{SCALE}}",
+      "tile_size": "{{TILE}}"
+    },
+    "class_type": "UpscaleModel",
+    "_meta": {
+      "title": "Upscale Model Settings"
+    }
+  },
+  "3": {
+    "inputs": {
+      "images": ["1", 0],
+      "model": ["2", 0]
+    },
+    "class_type": "ImageUpscale",
+    "_meta": {
+      "title": "Image Upscaling Process"
+    }
+  },
+  "4": {
+    "inputs": {
+      "images": ["3", 0],
+      "filename_prefix": "upscale_output",
+      "format": "{{OUTPUT_FORMAT}}"
+    },
+    "class_type": "SaveImage",
+    "_meta": {
+      "title": "Save Upscaled Image"
+    }
+  }
+}
