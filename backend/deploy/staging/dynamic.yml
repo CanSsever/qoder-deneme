@@ -1,0 +1,50 @@
+http:
+  middlewares:
+    secure-headers:
+      headers:
+        accessControlAllowMethods:
+          - GET
+          - OPTIONS
+          - PUT
+          - POST
+          - DELETE
+        accessControlAllowOriginList:
+          - "*"
+        accessControlAllowHeaders:
+          - "*"
+        accessControlMaxAge: 100
+        addVaryHeader: true
+        sslRedirect: true
+        stsSeconds: 31536000
+        stsIncludeSubdomains: true
+        stsPreload: true
+        forceSTSHeader: true
+        contentTypeNosniff: true
+        browserXssFilter: true
+        referrerPolicy: "same-origin"
+        
+    rate-limit:
+      rateLimit:
+        burst: 100
+        average: 50
+
+    compress:
+      compress: {}
+
+  routers:
+    api:
+      rule: "Host(`traefik.staging.yourdomain.com`) || Host(`traefik.staging.localhost`)"
+      service: "api@internal"
+      middlewares:
+        - "secure-headers"
+      tls:
+        certResolver: "cloudflare"
+
+tls:
+  options:
+    default:
+      minVersion: "VersionTLS12"
+      cipherSuites:
+        - "TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384"
+        - "TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305"
+        - "TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256"

@@ -28,8 +28,17 @@ A production-ready FastAPI backend for AI-powered face swapping with advanced fe
 - **Database**: SQLModel ORM with Alembic migrations
 - **Authentication**: JWT-based auth with bcrypt password hashing
 - **File Storage**: AWS S3 integration with presigned URLs
-- **Credit System**: User credits and subscription management
+- **Payments & Entitlements**: Superwall integration with subscription plans and usage limits
 - **AI Processing**: Modular AI pipeline for face swapping, restoration, and upscaling
+
+## Repository Layout
+
+- `backend/` - FastAPI backend, infrastructure scripts, and operations tooling
+- `backend/data/` - Local development artifacts (e.g., SQLite dev database)
+- `frontend/expo-app/` - Expo-based mobile client
+- `frontend/oneshot-sdk/` - Shared TypeScript SDK consumed by the Expo app
+- `frontend/tools/` - Verification and regression scripts for mobile and SDK fixes
+- `frontend/docs/` - Frontend-focused documentation and playbooks
 
 ## Quick Start
 
@@ -38,7 +47,7 @@ A production-ready FastAPI backend for AI-powered face swapping with advanced fe
 1. **Clone and setup:**
 ```bash
 git clone <repository-url>
-cd qoder-deneme
+cd qoder-deneme/backend
 cp .env.example .env
 ```
 
@@ -52,6 +61,8 @@ make docker-up
 - Documentation: http://localhost:8000/docs
 - Metrics: http://localhost:8000/metrics
 - Prometheus: http://localhost:9090
+
+> All backend commands run from the `backend/` directory.
 
 ### Local Development Setup
 
@@ -101,6 +112,24 @@ make setup      # Full development setup (install + migrate)
 make test       # Run tests
 make coverage   # Run tests with coverage report
 make test-e2e   # Run E2E tests with mock providers
+```
+
+### CI/CD & Deployment 🚀
+```bash
+# Deploy to environments
+make deploy:staging          # Deploy to staging
+make deploy:production       # Deploy to production
+
+# Rollback deployments
+make rollback:staging        # Rollback staging
+make rollback:production     # Rollback production
+
+# Smoke testing
+make smoke-test:staging      # Test staging deployment
+make smoke-test:production   # Test production deployment
+
+# Deployment status
+make deploy:status           # Check deployment history
 ```
 
 ### E2E Testing with Mock Providers
@@ -156,9 +185,14 @@ make health     # Check service health
 - `POST /api/v1/jobs` - Create new face swap job
 - `GET /api/v1/jobs/{job_id}` - Get job status
 - `GET /api/v1/jobs` - List user jobs
+- `GET /api/v1/jobs/limits` - Get user plan limits and usage
 
 ### File Upload
 - `POST /api/v1/uploads/presign` - Generate presigned S3 URL
+
+### Payments & Entitlements
+- `POST /api/v1/webhooks/superwall` - Superwall webhook for subscription events
+- `POST /api/v1/billing/mock_event` - Mock billing event (development only)
 
 ### Billing
 - `POST /api/v1/billing/validate` - Validate App Store/Play Store receipts
@@ -221,7 +255,298 @@ SUPERWALL_SECRET=your-superwall-secret
 DEFAULT_CREDITS=10
 ALLOWED_ORIGINS=http://localhost:3000,http://localhost:8081
 LOG_LEVEL=INFO
+
+# Payments & Entitlements Configuration
+SUPERWALL_SIGNING_SECRET=your-superwall-hmac-signing-secret
+ENTITLEMENTS_DEFAULT_PLAN=free
+DEV_BILLING_MODE=mock  # Options: mock, live
 ```
+
+## 🚀 CI/CD & Deployment
+
+OneShot Face Swapper includes a complete CI/CD pipeline with GitHub Actions, staging/production environments, and safe deployment practices.
+
+### Quick Deployment
+
+```bash
+# Deploy to staging (one command)
+make deploy:staging
+
+# Deploy to production (with confirmation)
+make deploy:production
+
+# Rollback if needed
+make rollback:staging
+make rollback:production
+```
+
+### Pipeline Features
+
+- ✅ **Automated Testing**: Unit tests, E2E tests, and coverage reporting
+- ✅ **Multi-platform Builds**: Docker images for AMD64 and ARM64
+- ✅ **Staging/Production**: Separate environments with approval workflows
+- ✅ **Zero Downtime**: Blue-green deployments with health checks
+- ✅ **Auto Rollback**: Automatic rollback on deployment failures
+- ✅ **Smoke Tests**: Post-deployment validation with comprehensive checks
+- ✅ **Security**: Secrets management and environment isolation
+
+### Infrastructure
+
+```mermaid
+graph TB
+    Internet[Internet] --> Traefik[Traefik Reverse Proxy]
+    Traefik --> App[OneShot App]
+    App --> DB[(Neon PostgreSQL)]
+    App --> Redis[(Upstash Redis)] 
+    App --> R2[Cloudflare R2]
+    App --> Worker[Background Worker]
+    Traefik --> LE[Let's Encrypt SSL]
+```
+
+**Managed Services:**
+- **Database**: Neon PostgreSQL (staging + production)
+- **Cache/Queue**: Upstash Redis (serverless)
+- **Storage**: Cloudflare R2 (S3-compatible)
+- **SSL**: Let's Encrypt with Cloudflare DNS
+- **Reverse Proxy**: Traefik with automatic HTTPS
+
+### Setup Guide
+
+1. **Configure GitHub Environments** (see [detailed guide](docs/github-environments-setup.md)):
+   - Create `staging` and `production` environments
+   - Add required secrets (database URLs, API keys, etc.)
+   - Set deployment branch restrictions
+
+2. **Configure Infrastructure**:
+   ```bash
+   # Copy environment templates
+   cp deploy/staging/.env.example deploy/staging/.env
+   cp deploy/production/.env.example deploy/production/.env
+   
+   # Edit with your actual values
+   # - Domain names and SSL configuration
+   # - Database and Redis URLs  
+   # - API keys and secrets
+   ```
+
+3. **Deploy**:
+   ```bash
+   # Push to develop branch → triggers staging deployment
+   git push origin develop
+   
+   # Push to main branch → triggers production deployment
+   git push origin main
+   ```
+
+### Deployment Commands
+
+```bash
+# Manual deployments
+make deploy:staging              # Deploy to staging
+make deploy:production           # Deploy to production
+make deploy:staging:full         # Deploy + smoke tests
+
+# Rollback deployments  
+make rollback:staging            # Rollback staging
+make rollback:production         # Rollback production
+
+# Testing deployments
+make smoke-test:staging          # Test staging (Bash)
+make smoke-test:production       # Test production (Bash)
+make smoke-test:staging:ps       # Test staging (PowerShell)
+make smoke-test:production:ps    # Test production (PowerShell)
+
+# Deployment status
+make deploy:status               # Check deployment history
+```
+
+### Smoke Test Coverage
+
+Post-deployment validation includes:
+- Health and readiness endpoints
+- API documentation access
+- Authentication and authorization
+- CORS and security headers
+- SSL/TLS configuration
+- Database connectivity
+- Performance benchmarks
+
+**Learn More**: See [CI/CD Deployment Guide](docs/ci-cd-deployment-guide.md) for complete setup instructions.
+
+## 📊 Monitoring & Alerts
+
+OneShot Face Swapper includes comprehensive monitoring, tracing, and alerting capabilities for production-ready observability.
+
+### Repository Layout
+
+- `backend/` - FastAPI backend, infrastructure scripts, and operations tooling
+- `backend/data/` - Local development artifacts (e.g., SQLite dev database)
+- `frontend/expo-app/` - Expo-based mobile client
+- `frontend/oneshot-sdk/` - Shared TypeScript SDK consumed by the Expo app
+- `frontend/tools/` - Verification and regression scripts for mobile and SDK fixes
+- `frontend/docs/` - Frontend-focused documentation and playbooks
+
+## Quick Start
+
+```bash
+# Start complete monitoring stack
+make monitor:setup
+
+# Test monitoring endpoints
+make monitor:test
+
+# Generate test alerts (dry-run)
+make monitor:test-alerts
+```
+
+### Monitoring Stack
+
+- ✅ **Sentry**: Exception tracking and performance monitoring
+- ✅ **Prometheus**: Metrics collection with custom job/provider metrics
+- ✅ **Grafana**: Visualization dashboards for performance and health
+- ✅ **Alertmanager**: Smart alerting with Slack/Email notifications
+- ✅ **Health Checks**: Enhanced `/readyz` with dependency timings
+
+### Key Metrics
+
+```mermaid
+graph LR
+    A[Job Processing] --> B[Latency P95/P99]
+    A --> C[Throughput]
+    A --> D[Error Rate]
+    E[GPU Providers] --> F[Provider Errors]
+    E --> G[Queue Depth]
+    H[System Health] --> I[DB/Redis/Storage]
+    H --> J[Response Times]
+```
+
+**Job Metrics**:
+- Job processing latency (P95/P99) by pipeline and provider
+- Job throughput and completion rates
+- Queue depth and concurrent job counts
+- Provider-specific error rates and failure types
+
+**System Metrics**:
+- HTTP request rates and response times
+- Database operation latencies
+- Health check timings for all dependencies
+- Cache hit rates and performance
+
+### Alerting Rules
+
+| Alert | Threshold | Duration | Severity |
+|-------|-----------|----------|----------|
+| High 5xx Error Rate | > 2% | 5m | Critical |
+| High Job Latency (P95) | > 30s | 10m | Warning |
+| High Queue Depth | > 100 jobs | 5m | Warning |
+| Consecutive Provider Failures | > 5 failures | 2m | Critical |
+| Database/Redis Down | Health check fails | 1-2m | Critical |
+
+### Dashboards
+
+**Performance Overview** ([JSON](ops/grafana/performance-dashboard.json)):
+- Job processing latency percentiles
+- Error rates and failure analysis
+- Queue depth and throughput metrics
+- GPU provider performance comparison
+
+**System Health** ([JSON](ops/grafana/health-dashboard.json)):
+- Service status indicators (DB/Redis/Storage/GPU)
+- Health check response times
+- HTTP endpoint performance
+- Active user metrics
+
+### Setup & Configuration
+
+1. **Configure Monitoring Environment**:
+   ```bash
+   # Add to .env
+   SENTRY_DSN=https://your-sentry-dsn@sentry.io/project-id
+   SENTRY_TRACES_SAMPLE_RATE=0.1
+   ENABLE_METRICS=true
+   ```
+
+2. **Start Monitoring Stack**:
+   ```bash
+   # Full setup with health checks
+   make monitor:setup
+   
+   # Or start components individually
+   make monitor:up     # Start all services
+   make monitor:test   # Verify endpoints
+   ```
+
+3. **Access Dashboards**:
+   - **Grafana**: http://localhost:3000 (admin/admin123)
+   - **Prometheus**: http://localhost:9090
+   - **Alertmanager**: http://localhost:9093
+
+### Alert Configuration
+
+**Slack Integration**:
+```yaml
+# ops/alerts/alertmanager.yml
+slack_configs:
+  - api_url: 'https://hooks.slack.com/services/YOUR/SLACK/WEBHOOK'
+    channel: '#alerts-critical'
+    title: '🚨 Critical Alert'
+```
+
+**Email Notifications**:
+```yaml
+email_configs:
+  - to: 'oncall@yourdomain.com'
+    subject: '🚨 CRITICAL: {{ .CommonAnnotations.summary }}'
+```
+
+### Health Endpoints
+
+- **`/healthz`**: Basic health check (always returns healthy)
+- **`/readyz`**: Comprehensive readiness with dependency checks
+- **`/metrics`**: Prometheus metrics endpoint
+
+**Enhanced `/readyz` Response**:
+```json
+{
+  "healthy": true,
+  "timestamp": 1696123456.789,
+  "total_duration_ms": 245.67,
+  "services": {
+    "database": {
+      "healthy": true,
+      "duration_ms": 45.2,
+      "details": {"connection": "ok", "query_test": "passed"}
+    },
+    "redis": {"healthy": true, "duration_ms": 12.1},
+    "storage": {"healthy": true, "duration_ms": 156.8},
+    "provider": {"healthy": true, "duration_ms": 31.5}
+  }
+}
+```
+
+### Testing & Validation
+
+```bash
+# Run monitoring tests
+pytest tests/test_monitoring.py -v
+
+# Generate test alerts (safe dry-run)
+make monitor:test-alerts
+
+# Monitor endpoints health
+make monitor:test
+
+# View monitoring logs
+make monitor:logs
+```
+
+### Production Considerations
+
+- **Sentry Sampling**: Set appropriate trace sampling rates (default: 10%)
+- **Metrics Retention**: Prometheus retains 30 days of metrics
+- **Alert Fatigue**: Use inhibition rules to prevent spam
+- **Dashboard Optimization**: Use template variables for environment filtering
+- **Security**: Secure Grafana with authentication in production
 
 ## GPU Provider Setup
 
@@ -297,6 +622,347 @@ COMFY_LOCAL_URL=http://localhost:8188
 GPU_PROVIDER=runpod
 RUNPOD_API_KEY=your-api-key
 RUNPOD_ENDPOINT_ID=your-endpoint-id
+```
+
+## Payments & Entitlements Integration
+
+The backend includes a comprehensive payments and entitlements system integrated with Superwall for subscription management.
+
+### Features
+
+- **Subscription Management**: Automatic handling of subscription events via webhooks
+- **Plan-based Limits**: Different job limits and parameter restrictions per plan
+- **Usage Tracking**: Daily usage aggregates with automatic reset
+- **HMAC Security**: Webhook signature verification for security
+- **Idempotent Processing**: Duplicate event prevention using event IDs
+
+### Subscription Plans
+
+| Plan | Daily Jobs | Concurrent Jobs | Max Side Parameter | Features |
+|------|------------|-----------------|-------------------|----------|
+| Free | 5 | 2 | 512px | Basic processing |
+| Pro | 50 | 5 | 1024px | Enhanced processing, priority queue |
+| Premium | 200 | 10 | 2048px | All features, highest priority |
+
+### Setup
+
+1. **Configure Superwall Integration:**
+   - Set `SUPERWALL_SIGNING_SECRET` in your environment
+   - Configure webhook URL in Superwall dashboard: `https://your-domain.com/api/v1/webhooks/superwall`
+
+2. **Initialize Default Plans:**
+   ```bash
+   make bootstrap
+   ```
+
+3. **Verify Configuration:**
+   ```bash
+   curl http://localhost:8000/api/v1/jobs/limits \
+        -H "Authorization: Bearer YOUR_JWT_TOKEN"
+   ```
+
+### Manual QA Testing
+
+#### Test Webhook Processing
+
+1. **Valid Superwall Webhook:**
+   ```bash
+   # Calculate HMAC signature (use online tool or script)
+   PAYLOAD='{"event_type":"subscription_created","event_id":"evt_123","user_id":"user_456","product_id":"pro_monthly","status":"active","expires_at":"2024-12-31T23:59:59Z"}'
+   SIGNATURE=$(echo -n "$PAYLOAD" | openssl dgst -sha256 -hmac "your-superwall-signing-secret" -binary | base64)
+   
+   curl -X POST "http://localhost:8000/api/v1/webhooks/superwall" \
+        -H "Content-Type: application/json" \
+        -H "X-Superwall-Signature: $SIGNATURE" \
+        -d "$PAYLOAD"
+   ```
+   
+   **Expected Response:**
+   ```json
+   {
+     "status": "success",
+     "event_id": "evt_123",
+     "processed": true
+   }
+   ```
+
+2. **Invalid Signature (should fail):**
+   ```bash
+   curl -X POST "http://localhost:8000/api/v1/webhooks/superwall" \
+        -H "Content-Type: application/json" \
+        -H "X-Superwall-Signature: invalid_signature" \
+        -d '{"event_type":"subscription_created","user_id":"user_456"}'
+   ```
+   
+   **Expected Response:** 401 Unauthorized
+
+3. **Idempotent Processing (duplicate event):**
+   ```bash
+   # Send the same webhook twice with same event_id
+   # Second request should return success but not process again
+   ```
+
+#### Test Daily Limits
+
+1. **Check User Limits:**
+   ```bash
+   curl "http://localhost:8000/api/v1/jobs/limits" \
+        -H "Authorization: Bearer YOUR_JWT_TOKEN"
+   ```
+   
+   **Expected Response:**
+   ```json
+   {
+     "plan_code": "free",
+     "limits": {
+       "daily_jobs": 5,
+       "concurrent_jobs": 2,
+       "max_side": 512
+     },
+     "usage": {
+       "jobs_today": 2,
+       "concurrent_jobs": 0
+     },
+     "remaining": {
+       "daily_jobs": 3,
+       "concurrent_jobs": 2
+     }
+   }
+   ```
+
+2. **Test Daily Limit Exceeded (429 Error):**
+   ```bash
+   # Create jobs until daily limit is reached
+   for i in {1..6}; do
+     curl -X POST "http://localhost:8000/api/v1/jobs" \
+          -H "Authorization: Bearer YOUR_JWT_TOKEN" \
+          -H "Content-Type: application/json" \
+          -d '{
+            "job_type": "face_restore",
+            "params": {
+              "input_url": "https://example.com/test.jpg",
+              "face_restore": "gfpgan",
+              "max_side": 512
+            }
+          }'
+     echo "Job $i created"
+   done
+   ```
+   
+   **6th job should return:**
+   ```json
+   {
+     "detail": "Daily job limit exceeded (5/5). Please upgrade your plan or wait until tomorrow.",
+     "error_code": "DAILY_LIMIT_EXCEEDED"
+   }
+   ```
+   **Status Code:** 429 Too Many Requests
+
+3. **Test Parameter Violation (422 Error):**
+   ```bash
+   curl -X POST "http://localhost:8000/api/v1/jobs" \
+        -H "Authorization: Bearer YOUR_JWT_TOKEN" \
+        -H "Content-Type: application/json" \
+        -d '{
+          "job_type": "face_restore",
+          "params": {
+            "input_url": "https://example.com/test.jpg",
+            "face_restore": "gfpgan",
+            "max_side": 1024
+          }
+        }'
+   ```
+   
+   **Expected Response (for free plan):**
+   ```json
+   {
+     "detail": "Parameter 'max_side' value 1024 exceeds plan limit of 512",
+     "error_code": "PARAMETER_VIOLATION"
+   }
+   ```
+   **Status Code:** 422 Unprocessable Entity
+
+4. **Test Payment Required (402 Error):**
+   ```bash
+   # Try to use a premium feature on free plan
+   curl -X POST "http://localhost:8000/api/v1/jobs" \
+        -H "Authorization: Bearer YOUR_JWT_TOKEN" \
+        -H "Content-Type: application/json" \
+        -d '{
+          "job_type": "face_swap",
+          "params": {
+            "src_face_url": "https://example.com/source.jpg",
+            "target_url": "https://example.com/target.jpg",
+            "premium_feature": true
+          }
+        }'
+   ```
+   
+   **Expected Response:**
+   ```json
+   {
+     "detail": "This feature requires a Pro or Premium subscription",
+     "error_code": "PAYMENT_REQUIRED"
+   }
+   ```
+   **Status Code:** 402 Payment Required
+
+#### Test Mock Billing Events (Development)
+
+1. **Trigger Subscription Creation:**
+   ```bash
+   curl -X POST "http://localhost:8000/api/v1/billing/mock_event" \
+        -H "Content-Type: application/json" \
+        -d '{
+          "event_type": "subscription_created",
+          "user_id": "test_user_123",
+          "product_id": "pro_monthly"
+        }'
+   ```
+   
+   **Expected Response:**
+   ```json
+   {
+     "status": "success",
+     "message": "Mock event sent to webhook",
+     "webhook_response": {
+       "status": "success",
+       "event_id": "mock_evt_789",
+       "processed": true
+     }
+   }
+   ```
+
+2. **Trigger Subscription Cancellation:**
+   ```bash
+   curl -X POST "http://localhost:8000/api/v1/billing/mock_event" \
+        -H "Content-Type: application/json" \
+        -d '{
+          "event_type": "subscription_cancelled",
+          "user_id": "test_user_123",
+          "product_id": "pro_monthly"
+        }'
+   ```
+
+### Testing Payments Integration
+
+1. **Run Payment Tests:**
+   ```bash
+   # Run all payment-related tests
+   pytest tests/test_payments_*.py -v
+   
+   # Run specific test categories
+   pytest tests/test_payments_webhooks.py -v
+   pytest tests/test_entitlements.py -v
+   
+   # Run with coverage
+   pytest tests/test_payments_*.py --cov=apps.api.services.entitlements --cov=apps.api.routers.webhooks --cov-report=html
+   ```
+
+2. **Expected Test Coverage:**
+   - Webhook signature validation (valid/invalid)
+   - Idempotent event processing
+   - Daily limit enforcement
+   - Parameter validation per plan
+   - Concurrent job limits
+   - Plan upgrades/downgrades
+   - Usage tracking accuracy
+
+### Troubleshooting Payments
+
+#### Common Issues:
+
+1. **Webhook Signature Verification Failed:**
+   - Verify `SUPERWALL_SIGNING_SECRET` matches Superwall dashboard
+   - Ensure payload is sent exactly as received (no modifications)
+   - Check signature generation algorithm (HMAC-SHA256)
+
+2. **User Entitlements Not Found:**
+   ```bash
+   # Check if user has entitlements
+   # Connect to database and run:
+   SELECT * FROM user_entitlements WHERE user_id = 'your_user_id';
+   
+   # If empty, user will use default plan (free)
+   ```
+
+3. **Daily Limits Not Reset:**
+   ```bash
+   # Check usage aggregates table
+   SELECT * FROM usage_aggregates WHERE user_id = 'your_user_id' ORDER BY date DESC;
+   
+   # Manually reset for testing:
+   DELETE FROM usage_aggregates WHERE user_id = 'your_user_id' AND date = CURRENT_DATE;
+   ```
+
+4. **Mock Billing Not Working:**
+   - Ensure `DEV_BILLING_MODE=mock` in environment
+   - Check that webhook endpoint is accessible
+   - Verify API server is running on correct port
+
+#### Debug Commands:
+
+```bash
+# Check entitlements service
+curl "http://localhost:8000/api/v1/jobs/limits" \
+     -H "Authorization: Bearer YOUR_JWT_TOKEN"
+
+# View subscription status
+# Connect to database:
+SELECT s.*, ue.plan_code, ue.limits_json 
+FROM subscriptions s 
+JOIN user_entitlements ue ON s.user_id = ue.user_id 
+WHERE s.user_id = 'your_user_id';
+
+# Check daily usage
+SELECT * FROM usage_aggregates 
+WHERE user_id = 'your_user_id' 
+AND date >= CURRENT_DATE - INTERVAL '7 days';
+
+# Test webhook signature generation
+echo -n 'your_payload' | openssl dgst -sha256 -hmac 'your_secret' -binary | base64
+```
+
+### Database Schema
+
+The payments system adds three new tables:
+
+```sql
+-- Subscription records from Superwall
+CREATE TABLE subscriptions (
+    id UUID PRIMARY KEY,
+    user_id UUID NOT NULL,
+    product_id VARCHAR NOT NULL,
+    status VARCHAR NOT NULL,
+    expires_at TIMESTAMP,
+    event_id VARCHAR UNIQUE NOT NULL,
+    raw_payload_json TEXT,
+    created_at TIMESTAMP DEFAULT NOW(),
+    updated_at TIMESTAMP DEFAULT NOW()
+);
+
+-- User entitlements (active plans)
+CREATE TABLE user_entitlements (
+    id UUID PRIMARY KEY,
+    user_id UUID NOT NULL,
+    plan_code VARCHAR NOT NULL,
+    limits_json TEXT NOT NULL,
+    effective_from TIMESTAMP NOT NULL,
+    effective_to TIMESTAMP,
+    created_at TIMESTAMP DEFAULT NOW(),
+    UNIQUE(user_id, effective_from)
+);
+
+-- Daily usage tracking
+CREATE TABLE usage_aggregates (
+    id UUID PRIMARY KEY,
+    user_id UUID NOT NULL,
+    date DATE NOT NULL,
+    jobs_created INTEGER DEFAULT 0,
+    created_at TIMESTAMP DEFAULT NOW(),
+    updated_at TIMESTAMP DEFAULT NOW(),
+    UNIQUE(user_id, date)
+);
 ```
 
 ## Manual E2E Testing Guide
@@ -895,6 +1561,15 @@ AI-powered face swapping and restoration service built with FastAPI, featuring L
 - **Authentication**: JWT with PassLib
 - **AI Processing**: GFPGAN, CodeFormer, custom LoRA models
 
+## Repository Layout
+
+- `backend/` - FastAPI backend, infrastructure scripts, and operations tooling
+- `backend/data/` - Local development artifacts (e.g., SQLite dev database)
+- `frontend/expo-app/` - Expo-based mobile client
+- `frontend/oneshot-sdk/` - Shared TypeScript SDK consumed by the Expo app
+- `frontend/tools/` - Verification and regression scripts for mobile and SDK fixes
+- `frontend/docs/` - Frontend-focused documentation and playbooks
+
 ## Quick Start
 
 ### Prerequisites
@@ -1168,6 +1843,131 @@ alembic downgrade -1
 - File upload validation
 - CORS configuration
 - Environment variable protection
+
+## 🔒 Privacy & Content Safety
+
+The OneShot Face Swapper system includes comprehensive privacy and content safety features to ensure responsible AI usage and protect user data.
+
+### Privacy Features
+
+#### Image Privacy
+- **EXIF Metadata Stripping**: All uploaded images have EXIF metadata automatically removed to protect user privacy
+- **Orientation Preservation**: Image orientation is preserved while removing sensitive metadata
+- **Privacy Processing**: Comprehensive processing pipeline for secure image handling
+
+#### Watermarking
+- **Plan-Based Watermarks**: Watermarks are applied based on user subscription plans:
+  - **Free Plan**: Watermarks always applied
+  - **Pro Plan**: Watermarks optional (disabled by default)
+  - **Premium Plan**: Full watermark customization
+- **Customizable Positioning**: Multiple watermark positions (bottom-right, top-left, center, etc.)
+- **Transparency Control**: Adjustable opacity and styling
+
+#### Data Retention
+- **Automatic Cleanup**: Old artifacts and job data are automatically deleted after the retention period
+- **Configurable Retention**: Default 30-day retention, configurable via `RETENTION_DAYS`
+- **S3 Integration**: Automatic deletion of stored files from S3/R2 storage
+- **Comprehensive Cleanup**: Jobs, artifacts, and associated files are cleaned up together
+
+### Content Safety
+
+#### NSFW Detection
+- **Heuristic Analysis**: Built-in NSFW detection using skin tone and content pattern analysis
+- **Configurable Modes**:
+  - `block`: Block NSFW content completely
+  - `flag`: Flag NSFW content but allow processing
+- **Plan-Based Policies**: Different sensitivity levels based on user plans
+
+#### Face Consent Enforcement
+- **Face Swap Gate**: Explicit consent required for face swap operations
+- **Plan-Based Requirements**:
+  - **Free**: Face swap consent + deepfake awareness consent
+  - **Pro**: Face swap consent + biometric processing consent  
+  - **Premium**: Face swap consent only
+- **Commercial Use Control**: Additional restrictions for commercial usage
+
+### Configuration
+
+#### Privacy Environment Variables
+
+| Variable | Description | Default |
+|----------|-------------|----------|
+| `RETENTION_DAYS` | Days to retain user data | 30 |
+| `NSFW_MODE` | NSFW handling mode | "block" |
+| `WATERMARK_DEFAULT` | Default watermark setting | true |
+| `ENABLE_EXIF_STRIPPING` | Enable EXIF metadata removal | true |
+| `ENABLE_WATERMARK` | Enable watermark functionality | true |
+| `ENABLE_NSFW_DETECTION` | Enable NSFW content detection | true |
+| `ENABLE_CONSENT_ENFORCEMENT` | Enable consent requirements | true |
+| `NSFW_CONFIDENCE_THRESHOLD` | NSFW detection threshold | 0.7 |
+
+### API Usage
+
+#### Face Swap with Consent
+```http
+POST /jobs
+Authorization: Bearer <token>
+Content-Type: application/json
+
+{
+  "job_type": "face_swap",
+  "input_image_url": "https://example.com/input.jpg",
+  "target_image_url": "https://example.com/target.jpg",
+  "parameters": {
+    "face_swap_consent": true,
+    "deepfake_awareness_consent": true,
+    "blend_ratio": 0.8
+  }
+}
+```
+
+#### Content Safety Error Response
+```json
+{
+  "detail": {
+    "code": "consent_required",
+    "message": "Face swap consent is required.",
+    "required_consents": ["face_swap_consent", "deepfake_awareness_consent"],
+    "missing_consents": ["face_swap_consent"]
+  }
+}
+```
+
+### Data Retention Management
+
+```bash
+# View retention statistics
+make retention:stats
+
+# Dry run cleanup (no deletion)
+make retention:dry-run
+
+# Execute cleanup
+make retention:run
+
+# Test privacy features
+make retention:test
+```
+
+### Privacy Policies by Plan
+
+#### Free Plan
+- ✅ NSFW content strictly blocked
+- ✅ Watermarks on all outputs
+- ✅ Full consent requirements for face swap
+- ❌ No commercial use
+
+#### Pro Plan  
+- ⚠️ NSFW content flagged but allowed
+- ✅ Optional watermarks (disabled by default)
+- ✅ Standard consent requirements
+- ✅ Commercial use permitted
+
+#### Premium Plan
+- ⚠️ Minimal content restrictions
+- ✅ Full watermark customization
+- ✅ Minimal consent requirements
+- ✅ Full commercial rights
 
 ## Support
 

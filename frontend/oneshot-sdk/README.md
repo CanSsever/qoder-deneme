@@ -1,0 +1,325 @@
+# OneShot SDK
+
+TypeScript SDK for the OneShot Face Swapper API. Integrate AI-powered face processing into your applications with just a few lines of code.
+
+## Installation
+
+```bash
+npm install oneshot-sdk
+```
+
+## Quick Start
+
+```typescript
+import { OneShotClient, JobType } from 'oneshot-sdk';
+
+// Initialize the client
+const client = new OneShotClient({
+  baseUrl: 'https://api.oneshot.com',
+  timeout: 30000,
+  retryAttempts: 3
+});
+
+// Login and start processing
+async function processImage() {
+  // 1. Authenticate
+  await client.login('user@example.com', 'password');
+  
+  // 2. Upload image
+  const presign = await client.presignUpload('image.jpg', 'image/jpeg', 1024000);
+  await client.uploadFile(presign.presigned_url, imageBlob, 'image/jpeg');
+  
+  // 3. Create job
+  const job = await client.createJob(
+    JobType.FACE_RESTORATION,
+    presign.presigned_url.split('?')[0],
+    { face_restore: 'gfpgan', enhance: true }
+  );
+  
+  // 4. Wait for completion
+  const result = await client.waitForJob(job.job_id, {
+    onProgress: (job) => console.log(`Progress: ${job.progress}%`)
+  });
+  
+  // 5. Get artifacts
+  const artifacts = await client.listArtifacts(result.job_id);
+  console.log('Result URL:', artifacts[0].output_url);
+}
+```
+
+## Features
+
+✅ **Comprehensive API Coverage**
+- Authentication (login, user profile)
+- File upload with presigned URLs
+- Job creation and management
+- Real-time progress tracking
+- Artifact retrieval
+
+✅ **Built-in Reliability**
+- Automatic retry for 5xx errors and network failures
+- Configurable timeout and retry settings
+- Idempotency key support
+- Strong TypeScript typing
+
+✅ **Error Handling**
+- Specific error types for different scenarios
+- Rate limit detection (429)
+- Payment required detection (402)  
+- Validation error details (422)
+
+✅ **Developer Experience**
+- Full TypeScript support
+- Job templates for common use cases
+- Progress polling with callbacks
+- Comprehensive test coverage
+
+## API Reference
+
+### Client Initialization
+
+```typescript
+const client = new OneShotClient({
+  baseUrl: string;          // API base URL
+  apiKey?: string;          // Optional API key (skips login)
+  timeout?: number;         // Request timeout (default: 30000ms)
+  retryAttempts?: number;   // Retry attempts (default: 3)
+  retryDelay?: number;      // Retry delay (default: 1000ms)
+});
+```
+
+### Authentication
+
+```typescript
+// Login with email/password
+const response = await client.login(email: string, password: string);
+
+// Get current user
+const user = await client.getMe();
+
+// Set token manually
+client.setAuthToken(token: string);
+
+// Check auth status
+const isAuthenticated = client.isAuth();
+
+// Logout
+client.logout();
+```
+
+### File Upload
+
+```typescript
+// Generate presigned URL
+const presign = await client.presignUpload(
+  filename: string,
+  contentType: string,
+  fileSize: number,
+  idempotencyKey?: string
+);
+
+// Upload file to presigned URL
+await client.uploadFile(
+  presignedUrl: string,
+  file: File | Blob,
+  contentType: string
+);
+```
+
+### Job Management
+
+```typescript
+// Create job
+const job = await client.createJob(
+  pipeline: JobType | string,
+  inputUrl: string,
+  params: Record<string, any>,
+  targetUrl?: string,
+  idempotencyKey?: string
+);
+
+// Get job status
+const status = await client.getJob(jobId: string);
+
+// List user jobs
+const jobs = await client.listJobs(skip?: number, limit?: number);
+
+// Wait for completion with polling
+const result = await client.waitForJob(jobId: string, {
+  pollingInterval?: number;  // Default: 2000ms
+  timeout?: number;          // Default: 300000ms (5 min)
+  onProgress?: (job) => void;
+});
+
+// Get job artifacts
+const artifacts = await client.listArtifacts(jobId: string);
+```
+
+### Job Types and Parameters
+
+#### Face Restoration
+```typescript
+import { JobTemplates } from 'oneshot-sdk';
+
+const { pipeline, inputUrl, params } = JobTemplates.faceRestore(
+  'https://example.com/input.jpg',
+  { 
+    model: 'gfpgan',    // 'gfpgan' | 'codeformer'
+    enhance: true       // Additional enhancement
+  }
+);
+
+const job = await client.createJob(pipeline, inputUrl, params);
+```
+
+#### Face Swap
+```typescript
+const { pipeline, inputUrl, targetUrl, params } = JobTemplates.faceSwap(
+  'https://example.com/source.jpg',
+  'https://example.com/target.jpg',
+  {
+    blend: 0.8,         // Blend ratio (0.0-1.0)
+    lora: 'custom'      // Optional LoRA model
+  }
+);
+
+const job = await client.createJob(pipeline, inputUrl, params, targetUrl);
+```
+
+#### Image Upscaling
+```typescript
+const { pipeline, inputUrl, params } = JobTemplates.upscale(
+  'https://example.com/input.jpg',
+  {
+    scale: 4,                    // Scale factor (2-8)
+    model: 'realesrgan_x4plus'   // Upscaling model
+  }
+);
+
+const job = await client.createJob(pipeline, inputUrl, params);
+```
+
+## Error Handling
+
+The SDK provides specific error types for different scenarios:
+
+```typescript
+import {
+  OneShotError,
+  AuthenticationError,
+  ValidationError,
+  RateLimitError,
+  PaymentRequiredError,
+  NetworkError
+} from 'oneshot-sdk';
+
+try {
+  const job = await client.createJob(JobType.FACE_RESTORATION, inputUrl);
+} catch (error) {
+  if (error instanceof RateLimitError) {
+    console.log('Rate limit exceeded, please wait');
+  } else if (error instanceof PaymentRequiredError) {
+    console.log('Upgrade required for this feature');
+  } else if (error instanceof ValidationError) {
+    console.log('Invalid parameters:', error.details);
+  } else if (error instanceof AuthenticationError) {
+    console.log('Please login again');
+  } else if (error instanceof NetworkError) {
+    console.log('Network issue, retrying...');
+  }
+}
+```
+
+## Advanced Usage
+
+### Custom HTTP Client
+
+```typescript
+import { FetchHttpClient } from 'oneshot-sdk';
+
+const httpClient = new FetchHttpClient('https://api.oneshot.com', 30000, 5);
+httpClient.setBearerToken('your-token');
+
+// Use for custom API calls
+const response = await httpClient.get('/custom-endpoint');
+```
+
+### Idempotency
+
+```typescript
+// Use idempotency keys to prevent duplicate operations
+const idempotencyKey = `upload_${Date.now()}_${Math.random()}`;
+
+const presign = await client.presignUpload(
+  'image.jpg',
+  'image/jpeg', 
+  1024000,
+  idempotencyKey
+);
+
+const job = await client.createJob(
+  JobType.FACE_RESTORATION,
+  inputUrl,
+  params,
+  undefined,
+  idempotencyKey
+);
+```
+
+### Progress Tracking
+
+```typescript
+const result = await client.waitForJob(jobId, {
+  pollingInterval: 1000,  // Poll every 1 second
+  timeout: 600000,        // 10 minute timeout
+  onProgress: (job) => {
+    console.log(`Status: ${job.status}`);
+    console.log(`Progress: ${job.progress}%`);
+    
+    if (job.status === 'running') {
+      updateProgressBar(job.progress);
+    }
+  }
+});
+```
+
+## Development
+
+### Build
+
+```bash
+npm run build
+```
+
+### Test
+
+```bash
+npm test
+```
+
+### Lint
+
+```bash
+npm run lint
+npm run lint:fix
+```
+
+### Type Check
+
+```bash
+npx tsc --noEmit
+```
+
+## Examples
+
+See the [Expo sample app](../expo-app) for a complete integration example.
+
+## Support
+
+- [API Documentation](https://docs.oneshot.com)
+- [GitHub Issues](https://github.com/oneshot/sdk/issues)
+- [Discord Community](https://discord.gg/oneshot)
+
+## License
+
+MIT License - see [LICENSE](LICENSE) for details.

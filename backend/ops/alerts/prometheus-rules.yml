@@ -1,0 +1,174 @@
+groups:
+  - name: oneshot-api-alerts
+    rules:
+      # High 5xx error rate alert
+      - alert: HighServerErrorRate
+        expr: sum(rate(oneshot_http_requests_total{status_code=~"5.."}[5m])) / sum(rate(oneshot_http_requests_total[5m])) > 0.02
+        for: 5m
+        labels:
+          severity: critical
+          service: oneshot-api
+          component: api
+        annotations:
+          summary: "High server error rate detected"
+          description: "Server error rate is {{ $value | humanizePercentage }} which is above the 2% threshold for 5 minutes"
+          runbook_url: "https://docs.oneshot.ai/runbooks/high-error-rate"
+          dashboard_url: "https://grafana.oneshot.ai/d/oneshot-performance"
+
+      # High job latency alert
+      - alert: HighJobLatency
+        expr: histogram_quantile(0.95, sum(rate(oneshot_job_duration_seconds_bucket[5m])) by (le, pipeline, provider)) > 30
+        for: 10m
+        labels:
+          severity: warning
+          service: oneshot-api
+          component: worker
+        annotations:
+          summary: "High job processing latency detected"
+          description: "P95 job latency for {{ $labels.pipeline }} ({{ $labels.provider }}) is {{ $value }}s which is above the 30s threshold"
+          runbook_url: "https://docs.oneshot.ai/runbooks/high-latency"
+          dashboard_url: "https://grafana.oneshot.ai/d/oneshot-performance"
+
+      # High queue depth alert
+      - alert: HighQueueDepth
+        expr: oneshot_queue_depth > 100
+        for: 5m
+        labels:
+          severity: warning
+          service: oneshot-api
+          component: queue
+        annotations:
+          summary: "High queue depth detected"
+          description: "Queue {{ $labels.queue_name }} has {{ $value }} jobs pending which is above the 100 job threshold"
+          runbook_url: "https://docs.oneshot.ai/runbooks/high-queue-depth"
+          dashboard_url: "https://grafana.oneshot.ai/d/oneshot-performance"
+
+      # Consecutive provider failures alert
+      - alert: ConsecutiveProviderFailures
+        expr: increase(oneshot_provider_errors_total[2m]) > 5
+        for: 2m
+        labels:
+          severity: critical
+          service: oneshot-api
+          component: provider
+        annotations:
+          summary: "Consecutive GPU provider failures detected"
+          description: "Provider {{ $labels.provider }} has {{ $value }} failures in the last 2 minutes ({{ $labels.error_type }})"
+          runbook_url: "https://docs.oneshot.ai/runbooks/provider-failures"
+          dashboard_url: "https://grafana.oneshot.ai/d/oneshot-performance"
+
+  - name: oneshot-infrastructure-alerts
+    rules:
+      # Database connectivity alert
+      - alert: DatabaseDown
+        expr: oneshot_health_check_status{service="database"} == 0
+        for: 1m
+        labels:
+          severity: critical
+          service: oneshot-api
+          component: database
+        annotations:
+          summary: "Database is down"
+          description: "Database health check is failing"
+          runbook_url: "https://docs.oneshot.ai/runbooks/database-down"
+          dashboard_url: "https://grafana.oneshot.ai/d/oneshot-health"
+
+      # Redis connectivity alert
+      - alert: RedisDown
+        expr: oneshot_health_check_status{service="redis"} == 0
+        for: 2m
+        labels:
+          severity: critical
+          service: oneshot-api
+          component: redis
+        annotations:
+          summary: "Redis is down"
+          description: "Redis health check is failing"
+          runbook_url: "https://docs.oneshot.ai/runbooks/redis-down"
+          dashboard_url: "https://grafana.oneshot.ai/d/oneshot-health"
+
+      # Storage connectivity alert
+      - alert: StorageDown
+        expr: oneshot_health_check_status{service="storage"} == 0
+        for: 3m
+        labels:
+          severity: warning
+          service: oneshot-api
+          component: storage
+        annotations:
+          summary: "Storage is down"
+          description: "S3/R2 storage health check is failing"
+          runbook_url: "https://docs.oneshot.ai/runbooks/storage-down"
+          dashboard_url: "https://grafana.oneshot.ai/d/oneshot-health"
+
+      # GPU provider connectivity alert
+      - alert: GPUProviderDown
+        expr: oneshot_health_check_status{service="provider"} == 0
+        for: 2m
+        labels:
+          severity: critical
+          service: oneshot-api
+          component: provider
+        annotations:
+          summary: "GPU provider is down"
+          description: "GPU provider health check is failing"
+          runbook_url: "https://docs.oneshot.ai/runbooks/provider-down"
+          dashboard_url: "https://grafana.oneshot.ai/d/oneshot-health"
+
+      # High database response time
+      - alert: HighDatabaseLatency
+        expr: histogram_quantile(0.95, sum(rate(oneshot_health_check_duration_seconds_bucket{service="database"}[5m])) by (le)) > 1
+        for: 5m
+        labels:
+          severity: warning
+          service: oneshot-api
+          component: database
+        annotations:
+          summary: "High database response time"
+          description: "Database P95 response time is {{ $value }}s which is above the 1s threshold"
+          runbook_url: "https://docs.oneshot.ai/runbooks/high-db-latency"
+          dashboard_url: "https://grafana.oneshot.ai/d/oneshot-health"
+
+  - name: oneshot-business-alerts
+    rules:
+      # High job failure rate
+      - alert: HighJobFailureRate
+        expr: sum(rate(oneshot_jobs_total{status="failed"}[10m])) / sum(rate(oneshot_jobs_total[10m])) > 0.1
+        for: 10m
+        labels:
+          severity: warning
+          service: oneshot-api
+          component: worker
+        annotations:
+          summary: "High job failure rate detected"
+          description: "Job failure rate is {{ $value | humanizePercentage }} which is above the 10% threshold"
+          runbook_url: "https://docs.oneshot.ai/runbooks/high-job-failure-rate"
+          dashboard_url: "https://grafana.oneshot.ai/d/oneshot-performance"
+
+      # No job completions
+      - alert: NoJobCompletions
+        expr: sum(increase(oneshot_jobs_total{status="completed"}[15m])) == 0
+        for: 15m
+        labels:
+          severity: warning
+          service: oneshot-api
+          component: worker
+        annotations:
+          summary: "No job completions in 15 minutes"
+          description: "No jobs have been completed in the last 15 minutes"
+          runbook_url: "https://docs.oneshot.ai/runbooks/no-job-completions"
+          dashboard_url: "https://grafana.oneshot.ai/d/oneshot-performance"
+
+      # High concurrent jobs
+      - alert: HighConcurrentJobs
+        expr: oneshot_concurrent_jobs > 20
+        for: 10m
+        labels:
+          severity: warning
+          service: oneshot-api
+          component: worker
+        annotations:
+          summary: "High number of concurrent jobs"
+          description: "{{ $labels.provider }} has {{ $value }} concurrent jobs which may indicate processing bottlenecks"
+          runbook_url: "https://docs.oneshot.ai/runbooks/high-concurrent-jobs"
+          dashboard_url: "https://grafana.oneshot.ai/d/oneshot-performance"
