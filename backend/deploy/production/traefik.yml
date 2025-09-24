@@ -1,0 +1,81 @@
+api:
+  dashboard: false  # Disabled in production
+  debug: false      # Disabled in production
+  insecure: false   # Force secure access only
+
+entryPoints:
+  web:
+    address: ":80"
+    http:
+      redirections:
+        entrypoint:
+          to: websecure
+          scheme: https
+          permanent: true
+      middlewares:
+        - "secure-headers@file"  # Apply security headers to HTTP
+  websecure:
+    address: ":443"
+    http:
+      middlewares:
+        - "secure-headers@file"  # Apply security headers to HTTPS
+      tls:
+        options: "strict@file"    # Use strict TLS configuration
+
+providers:
+  docker:
+    endpoint: "unix:///var/run/docker.sock"
+    exposedByDefault: false
+    network: web
+  file:
+    filename: /etc/traefik/dynamic.yml
+    watch: true
+
+certificatesResolvers:
+  cloudflare:
+    acme:
+      email: ${ACME_EMAIL}
+      storage: /acme.json
+      dnsChallenge:
+        provider: cloudflare
+        resolvers:
+          - "1.1.1.1:53"
+          - "8.8.8.8:53"
+
+log:
+  level: WARN      # Reduced logging for production
+  format: json
+  filePath: "/var/log/traefik/traefik.log"
+  maxSize: 100     # Max log file size in MB
+  maxBackups: 3    # Number of backup files
+  maxAge: 7        # Days to retain logs
+  compress: true   # Compress old logs
+
+accessLog:
+  format: json
+  filePath: "/var/log/traefik/access.log"
+  maxSize: 100
+  maxBackups: 5
+  maxAge: 30
+  compress: true
+  bufferingSize: 100
+  fields:
+    defaultMode: keep
+    names:
+      ClientUsername: drop
+      StartUTC: keep
+      StartLocal: drop
+    headers:
+      defaultMode: drop  # More restrictive for production
+      names:
+        Content-Type: keep
+        Referer: keep
+        User-Agent: redact  # Redact instead of keep
+        Authorization: drop
+        X-Forwarded-For: keep
+        X-Real-IP: keep
+
+metrics:
+  prometheus:
+    addEntryPointsLabels: true
+    addServicesLabels: true

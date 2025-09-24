@@ -1,0 +1,181 @@
+global:
+  smtp_smarthost: 'localhost:587'
+  smtp_from: 'alerts@oneshot.ai'
+  smtp_auth_username: 'alerts@oneshot.ai'
+  smtp_auth_password: 'your-smtp-password'
+  slack_api_url: 'https://hooks.slack.com/services/YOUR/SLACK/WEBHOOK'
+
+# Templates for alert notifications
+templates:
+  - '/etc/alertmanager/templates/*.tmpl'
+
+# Route tree for alert routing
+route:
+  group_by: ['alertname', 'cluster', 'service']
+  group_wait: 30s
+  group_interval: 5m
+  repeat_interval: 12h
+  receiver: 'web.hook'
+  routes:
+    # Critical alerts go to both Slack and email immediately
+    - match:
+        severity: critical
+      receiver: 'critical-alerts'
+      group_wait: 10s
+      repeat_interval: 5m
+
+    # Warning alerts go to Slack only during business hours
+    - match:
+        severity: warning
+      receiver: 'warning-alerts'
+      group_wait: 5m
+      repeat_interval: 4h
+
+    # Database alerts get special handling
+    - match:
+        component: database
+      receiver: 'database-alerts'
+      group_wait: 30s
+      repeat_interval: 30m
+
+    # Provider alerts for GPU issues
+    - match:
+        component: provider
+      receiver: 'provider-alerts'
+      group_wait: 1m
+      repeat_interval: 15m
+
+# Inhibition rules to prevent alert spam
+inhibit_rules:
+  # Inhibit warning alerts if critical alerts are firing
+  - source_match:
+      severity: 'critical'
+    target_match:
+      severity: 'warning'
+    equal: ['alertname', 'instance']
+
+  # Inhibit individual service alerts if the whole cluster is down
+  - source_match:
+      alertname: 'ClusterDown'
+    target_match_re:
+      service: '.*'
+    equal: ['cluster']
+
+# Receiver configurations
+receivers:
+  # Default webhook receiver
+  - name: 'web.hook'
+    webhook_configs:
+      - url: 'http://127.0.0.1:5001/'
+        send_resolved: true
+
+  # Critical alerts - both Slack and email
+  - name: 'critical-alerts'
+    email_configs:
+      - to: 'oncall@oneshot.ai'
+        subject: '🚨 CRITICAL: {{ range .Alerts }}{{ .Annotations.summary }}{{ end }}'
+        body: |
+          {{ range .Alerts }}
+          **Alert:** {{ .Annotations.summary }}
+          **Description:** {{ .Annotations.description }}
+          **Severity:** {{ .Labels.severity }}
+          **Service:** {{ .Labels.service }}
+          **Component:** {{ .Labels.component }}
+          **Dashboard:** {{ .Annotations.dashboard_url }}
+          **Runbook:** {{ .Annotations.runbook_url }}
+          **Started:** {{ .StartsAt.Format "2006-01-02 15:04:05 UTC" }}
+          {{ end }}
+        headers:
+          Subject: '🚨 CRITICAL OneShot Alert'
+    slack_configs:
+      - api_url: 'https://hooks.slack.com/services/YOUR/SLACK/WEBHOOK'
+        channel: '#alerts-critical'
+        username: 'OneShot Alertmanager'
+        icon_emoji: ':rotating_light:'
+        title: '🚨 Critical Alert: {{ range .Alerts }}{{ .Annotations.summary }}{{ end }}'
+        text: |
+          {{ range .Alerts }}
+          *Alert:* {{ .Annotations.summary }}
+          *Description:* {{ .Annotations.description }}
+          *Service:* {{ .Labels.service }} ({{ .Labels.component }})
+          *Dashboard:* <{{ .Annotations.dashboard_url }}|View Dashboard>
+          *Runbook:* <{{ .Annotations.runbook_url }}|View Runbook>
+          {{ end }}
+        send_resolved: true
+
+  # Warning alerts - Slack only
+  - name: 'warning-alerts'
+    slack_configs:
+      - api_url: 'https://hooks.slack.com/services/YOUR/SLACK/WEBHOOK'
+        channel: '#alerts-warning'
+        username: 'OneShot Alertmanager'
+        icon_emoji: ':warning:'
+        title: '⚠️ Warning: {{ range .Alerts }}{{ .Annotations.summary }}{{ end }}'
+        text: |
+          {{ range .Alerts }}
+          *Alert:* {{ .Annotations.summary }}
+          *Description:* {{ .Annotations.description }}
+          *Service:* {{ .Labels.service }} ({{ .Labels.component }})
+          *Dashboard:* <{{ .Annotations.dashboard_url }}|View Dashboard>
+          {{ end }}
+        send_resolved: true
+
+  # Database-specific alerts
+  - name: 'database-alerts'
+    email_configs:
+      - to: 'devops@oneshot.ai'
+        subject: '🗄️ Database Alert: {{ range .Alerts }}{{ .Annotations.summary }}{{ end }}'
+        body: |
+          Database issue detected:
+          
+          {{ range .Alerts }}
+          **Alert:** {{ .Annotations.summary }}
+          **Description:** {{ .Annotations.description }}
+          **Component:** {{ .Labels.component }}
+          **Dashboard:** {{ .Annotations.dashboard_url }}
+          **Runbook:** {{ .Annotations.runbook_url }}
+          {{ end }}
+    slack_configs:
+      - api_url: 'https://hooks.slack.com/services/YOUR/SLACK/WEBHOOK'
+        channel: '#alerts-database'
+        username: 'OneShot Alertmanager'
+        icon_emoji: ':database:'
+        title: '🗄️ Database Alert'
+        text: |
+          {{ range .Alerts }}
+          *Alert:* {{ .Annotations.summary }}
+          *Description:* {{ .Annotations.description }}
+          *Dashboard:* <{{ .Annotations.dashboard_url }}|View Dashboard>
+          *Runbook:* <{{ .Annotations.runbook_url }}|View Runbook>
+          {{ end }}
+
+  # GPU provider alerts
+  - name: 'provider-alerts'
+    email_configs:
+      - to: 'ai-team@oneshot.ai'
+        subject: '🖥️ GPU Provider Alert: {{ range .Alerts }}{{ .Annotations.summary }}{{ end }}'
+        body: |
+          GPU Provider issue detected:
+          
+          {{ range .Alerts }}
+          **Alert:** {{ .Annotations.summary }}
+          **Description:** {{ .Annotations.description }}
+          **Provider:** {{ .Labels.provider }}
+          **Error Type:** {{ .Labels.error_type }}
+          **Dashboard:** {{ .Annotations.dashboard_url }}
+          **Runbook:** {{ .Annotations.runbook_url }}
+          {{ end }}
+    slack_configs:
+      - api_url: 'https://hooks.slack.com/services/YOUR/SLACK/WEBHOOK'
+        channel: '#alerts-gpu'
+        username: 'OneShot Alertmanager'
+        icon_emoji: ':computer:'
+        title: '🖥️ GPU Provider Alert'
+        text: |
+          {{ range .Alerts }}
+          *Alert:* {{ .Annotations.summary }}
+          *Description:* {{ .Annotations.description }}
+          *Provider:* {{ .Labels.provider }}
+          *Dashboard:* <{{ .Annotations.dashboard_url }}|View Dashboard>
+          *Runbook:* <{{ .Annotations.runbook_url }}|View Runbook>
+          {{ end }}

@@ -1,0 +1,185 @@
+http:
+  middlewares:
+    # Production CORS - Strict domain whitelist only
+    secure-headers:
+      headers:
+        accessControlAllowMethods:
+          - GET
+          - POST
+          - PUT
+          - DELETE
+          - OPTIONS
+        # PRODUCTION: Replace with actual app domains
+        accessControlAllowOriginList:
+          - "https://yourdomain.com"
+          - "https://www.yourdomain.com"
+          - "https://app.yourdomain.com"
+        accessControlAllowHeaders:
+          - "Authorization"
+          - "Content-Type"
+          - "X-Requested-With"
+          - "Accept"
+          - "Origin"
+        accessControlAllowCredentials: true
+        accessControlMaxAge: 86400
+        addVaryHeader: true
+        # HTTPS Enforcement
+        sslRedirect: true
+        sslForceHost: true
+        # HSTS Configuration - 1 year
+        stsSeconds: 31536000
+        stsIncludeSubdomains: true
+        stsPreload: true
+        forceSTSHeader: true
+        # Security Headers
+        contentTypeNosniff: true
+        browserXssFilter: true
+        frameDeny: true
+        contentSecurityPolicy: "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; font-src 'self'; connect-src 'self' https://api.yourdomain.com; frame-ancestors 'none'"
+        referrerPolicy: "strict-origin-when-cross-origin"
+        permissionsPolicy: "camera=(), microphone=(), geolocation=(), payment=()"
+        customRequestHeaders:
+          X-Forwarded-Proto: "https"
+        customResponseHeaders:
+          X-Frame-Options: "DENY"
+          X-Content-Type-Options: "nosniff"
+          X-XSS-Protection: "1; mode=block"
+          X-Robots-Tag: "noindex, nofollow"
+
+    # API-specific CORS (more restrictive)
+    api-cors:
+      headers:
+        accessControlAllowMethods:
+          - GET
+          - POST
+          - PUT
+          - DELETE
+          - OPTIONS
+        accessControlAllowOriginList:
+          - "https://app.yourdomain.com"
+        accessControlAllowHeaders:
+          - "Authorization"
+          - "Content-Type"
+          - "X-Requested-With"
+        accessControlAllowCredentials: true
+        accessControlMaxAge: 3600
+        addVaryHeader: true
+        
+    # Enhanced rate limiting for production
+    rate-limit:
+      rateLimit:
+        burst: 50  # Reduced for production
+        average: 25
+        period: "1m"
+        sourceCriterion:
+          ipStrategy:
+            depth: 1
+            excludedIPs:
+              - "127.0.0.1/32"
+              - "10.0.0.0/8"
+
+    # API-specific stricter rate limiting
+    api-rate-limit:
+      rateLimit:
+        burst: 20
+        average: 10
+        period: "1m"
+        sourceCriterion:
+          ipStrategy:
+            depth: 1
+
+    # Compression middleware
+    compress:
+      compress: {}
+
+    # IP whitelist for admin endpoints (configure with actual IPs)
+    admin-ip-whitelist:
+      ipWhiteList:
+        sourceRange:
+          - "127.0.0.1/32"  # localhost
+          - "10.0.0.0/8"    # private network
+          # Add actual admin IP ranges
+
+    # Production monitoring auth
+    monitoring-auth:
+      basicAuth:
+        users:
+          - "admin:$2y$10$example"  # Replace with actual hashed password
+
+  routers:
+    # Main API router with strict security
+    api:
+      rule: "Host(`api.yourdomain.com`)"
+      service: "api@internal"
+      middlewares:
+        - "secure-headers"
+        - "api-cors"
+        - "api-rate-limit"
+        - "compress"
+      tls:
+        certResolver: "cloudflare"
+        options: "strict"
+      priority: 100
+
+    # Admin/monitoring endpoints (restricted access)
+    traefik-dashboard:
+      rule: "Host(`traefik.yourdomain.com`)"
+      service: "api@internal"
+      middlewares:
+        - "secure-headers"
+        - "admin-ip-whitelist"
+        - "monitoring-auth"
+        - "rate-limit"
+      tls:
+        certResolver: "cloudflare"
+        options: "strict"
+      priority: 200
+
+    # Health check endpoint (minimal middleware)
+    health:
+      rule: "Host(`api.yourdomain.com`) && Path(`/health`)"
+      service: "api@internal"
+      middlewares:
+        - "secure-headers"
+      tls:
+        certResolver: "cloudflare"
+        options: "strict"
+      priority: 300
+
+tls:
+  options:
+    # Default TLS configuration
+    default:
+      minVersion: "VersionTLS12"
+      maxVersion: "VersionTLS13"
+      curvePreferences:
+        - "X25519"
+        - "secp384r1"
+        - "secp256r1"
+      cipherSuites:
+        - "TLS_AES_256_GCM_SHA384"
+        - "TLS_AES_128_GCM_SHA256"
+        - "TLS_CHACHA20_POLY1305_SHA256"
+        - "TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384"
+        - "TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305"
+        - "TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256"
+        - "TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384"
+        - "TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305"
+        - "TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256"
+      sniStrict: true
+
+    # Strict TLS for production (TLS 1.3 preferred)
+    strict:
+      minVersion: "VersionTLS13"
+      maxVersion: "VersionTLS13"
+      curvePreferences:
+        - "X25519"
+        - "secp384r1"
+      cipherSuites:
+        - "TLS_AES_256_GCM_SHA384"
+        - "TLS_AES_128_GCM_SHA256"
+        - "TLS_CHACHA20_POLY1305_SHA256"
+      sniStrict: true
+      alpnProtocols:
+        - "h2"
+        - "http/1.1"
