@@ -38,9 +38,30 @@ export class OneShotClient {
   }
 
   /**
-   * Authenticate user with email and password
+   * Check backend connectivity and health
+   */
+  async healthCheck(): Promise<{ status: string; timestamp: number; service: string; version: string }> {
+    return this.httpClient.get('/healthz');
+  }
+
+  /**
+   * Check backend readiness (comprehensive health check)
+   */
+  async readinessCheck(): Promise<any> {
+    return this.httpClient.get('/readyz');
+  }
+
+  /**
+   * Authenticate user with email and password with pre-connectivity check
    */
   async login(email: string, password: string): Promise<UserResponse> {
+    // First, verify backend connectivity
+    try {
+      await this.healthCheck();
+    } catch (healthError: any) {
+      throw new Error(`Unable to reach server: ${healthError.message}. Please check your network connection.`);
+    }
+
     const request: LoginRequest = { email, password };
     
     const response = await this.httpClient.post<UserResponse>(
@@ -56,9 +77,16 @@ export class OneShotClient {
   }
 
   /**
-   * Register a new user account
+   * Register a new user account with pre-connectivity check
    */
   async register(email: string, password: string): Promise<UserResponse> {
+    // First, verify backend connectivity
+    try {
+      await this.healthCheck();
+    } catch (healthError: any) {
+      throw new Error(`Unable to reach server: ${healthError.message}. Please check your network connection.`);
+    }
+
     const request: RegisterRequest = { email, password };
     
     const response = await this.httpClient.post<UserResponse>(
