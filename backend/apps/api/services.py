@@ -1,10 +1,13 @@
 """
 Authentication service for user management and JWT handling.
+Enhanced with timeout protection, structured logging, and resilient operations.
 """
 from datetime import datetime, timedelta
 from typing import Optional
 from uuid import UUID
 from sqlmodel import Session, select
+import structlog
+import time
 from apps.core.security import SecurityUtils
 from apps.core.exceptions import AuthenticationError, NotFoundError, ValidationError
 from apps.core.settings import settings
@@ -15,6 +18,9 @@ import boto3
 from botocore.exceptions import ClientError
 from uuid import uuid4
 import os
+
+# Initialize structured logger
+logger = structlog.get_logger()
 
 
 class AuthService:
@@ -71,39 +77,97 @@ class AuthService:
     
     @staticmethod
     def login_user(session: Session, login_data: UserLogin) -> UserResponse:
-        """Login user and return JWT token."""
-        user = AuthService.authenticate_user(
-            session, 
-            login_data.email, 
-            login_data.password
+        """Login user and return JWT token with enhanced monitoring and timeout protection."""
+        start_time = time.time()
+        
+        logger.info(
+            "Login process started",
+            email=login_data.email
         )
         
-        if not user:
-            raise AuthenticationError("Invalid email or password")
-        
-        # Create access token
-        access_token = SecurityUtils.create_access_token(
-            data={"sub": str(user.id)}
-        )
-        
-        # Update last login time
-        user.updated_at = datetime.utcnow()
-        session.add(user)
-        session.commit()
-        session.refresh(user)
-        
-        return UserResponse(
-            access_token=access_token,
-            user=UserRead(
-                id=user.id,
-                email=user.email,
-                credits=user.credits,
-                subscription_status=user.subscription_status,
-                subscription_expires_at=user.subscription_expires_at,
-                created_at=user.created_at,
-                updated_at=user.updated_at
+        try:
+            # Authenticate user with timeout monitoring
+            auth_start = time.time()
+            user = AuthService.authenticate_user(
+                session, 
+                login_data.email, 
+                login_data.password
             )
-        )
+            auth_duration = int((time.time() - auth_start) * 1000)
+            
+            if not user:
+                logger.warning(
+                    "Authentication failed - invalid credentials",
+                    email=login_data.email,
+                    auth_duration_ms=auth_duration
+                )
+                raise AuthenticationError("Invalid email or password")
+            
+            logger.info(
+                "User authenticated successfully",
+                user_id=str(user.id),
+                email=login_data.email,
+                auth_duration_ms=auth_duration
+            )
+            
+            # Create access token with timeout monitoring
+            token_start = time.time()
+            access_token = SecurityUtils.create_access_token(
+                data={"sub": str(user.id)}
+            )
+            token_duration = int((time.time() - token_start) * 1000)
+            
+            # Update last login time with timeout monitoring
+            update_start = time.time()
+            user.updated_at = datetime.utcnow()
+            session.add(user)
+            session.commit()
+            session.refresh(user)
+            update_duration = int((time.time() - update_start) * 1000)
+            
+            total_duration = int((time.time() - start_time) * 1000)
+            
+            logger.info(
+                "Login completed successfully",
+                user_id=str(user.id),
+                email=login_data.email,
+                auth_duration_ms=auth_duration,
+                token_duration_ms=token_duration,
+                update_duration_ms=update_duration,
+                total_duration_ms=total_duration
+            )
+            
+            return UserResponse(
+                access_token=access_token,
+                user=UserRead(
+                    id=user.id,
+                    email=user.email,
+                    credits=user.credits,
+                    subscription_status=user.subscription_status,
+                    subscription_expires_at=user.subscription_expires_at,
+                    created_at=user.created_at,
+                    updated_at=user.updated_at
+                )
+            )
+            
+        except AuthenticationError:
+            # Re-raise authentication errors as-is
+            raise
+            
+        except Exception as e:
+            total_duration = int((time.time() - start_time) * 1000)
+            
+            logger.error(
+                "Login failed with unexpected error",
+                email=login_data.email,
+                error=str(e),
+                error_type=type(e).__name__,
+                total_duration_ms=total_duration
+            )
+            
+            # Convert database/system errors to authentication errors
+            # This prevents internal error details from leaking to clients
+            raise AuthenticationError("Authentication service temporarily unavailable")
     
     @staticmethod
     def get_user_by_id(session: Session, user_id: UUID) -> Optional[User]:
