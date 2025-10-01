@@ -23,7 +23,7 @@ export class FetchHttpClient implements HttpClient {
   constructor(
     baseUrl: string,
     timeout = 30000,
-    retryAttempts = 3,
+    retryAttempts = 5, // Increased for mobile scenarios
     retryDelay = 1000
   ) {
     this.baseUrl = baseUrl.replace(/\/$/, ''); // Remove trailing slash
@@ -124,6 +124,8 @@ export class FetchHttpClient implements HttpClient {
     config: RequestInit,
     retriesLeft: number
   ): Promise<T> {
+    const attemptNumber = this.defaultRetryAttempts - retriesLeft + 1;
+    
     try {
       const response = await fetch(url, config);
       return await this.handleResponse<T>(response);
@@ -135,7 +137,16 @@ export class FetchHttpClient implements HttpClient {
       }
       
       if (this.shouldRetry(error, retriesLeft)) {
-        await this.delay(this.defaultRetryDelay);
+        // Progressive backoff: 1s, 2s, 4s, 8s, 16s
+        const backoffDelay = this.defaultRetryDelay * Math.pow(2, attemptNumber - 1);
+        console.warn(`Request failed, retrying in ${backoffDelay}ms (attempt ${attemptNumber}/${this.defaultRetryAttempts})`, {
+          url,
+          error: error.message,
+          attemptNumber,
+          retriesLeft
+        });
+        
+        await this.delay(backoffDelay);
         return this.executeWithRetry<T>(url, config, retriesLeft - 1);
       }
       throw this.normalizeError(error);
@@ -195,17 +206,23 @@ export class FetchHttpClient implements HttpClient {
       return error;
     }
 
-    // Check for timeout errors
+    // Check for timeout errors with more detailed messages
     if (error.name === 'AbortError' || 
         (error.message && (error.message.includes('timeout') || error.message.includes('aborted')))) {
-      return new NetworkError('Request timeout');
+      return new NetworkError('Connection timeout. Please check your network connection and try again.');
     }
 
+    // Check for network connectivity issues
     if (error instanceof TypeError && error.message.includes('fetch')) {
-      return new NetworkError('Network connection failed');
+      return new NetworkError('Unable to reach server. Please check your internet connection.');
     }
 
-    return new OneShotError(ErrorCode.NETWORK_ERROR, error.message || 'Unknown error');
+    // Check for specific network errors
+    if (error.message && error.message.includes('Failed to fetch')) {
+      return new NetworkError('Network request failed. Please check your connection to the server.');
+    }
+
+    return new OneShotError(ErrorCode.NETWORK_ERROR, error.message || 'Unknown network error');
   }
 
   private async delay(ms: number): Promise<void> {
