@@ -1,7 +1,9 @@
 /**
- * OneShot SDK - Main client class
+ * OneShot SDK - Enhanced client with adaptive timeout and resilient authentication
  */
 import { FetchHttpClient } from './http-client';
+import { ErrorClassifier, UserFeedbackGenerator, ClassifiedError } from './error-classification';
+import { NetworkQuality } from './network-quality';
 import {
   SdkConfig,
   LoginRequest,
@@ -21,6 +23,8 @@ import {
 export class OneShotClient {
   private httpClient: FetchHttpClient;
   private isAuthenticated = false;
+  private authAttempts = 0;
+  private lastAuthError?: ClassifiedError;
 
   constructor(config: SdkConfig) {
     this.httpClient = new FetchHttpClient(
@@ -52,42 +56,84 @@ export class OneShotClient {
   }
 
   /**
-   * Authenticate user with email and password with pre-connectivity check
+   * Authenticate user with email and password with enhanced error handling
    */
-  async login(email: string, password: string): Promise<UserResponse> {
-    // First, verify backend connectivity
+  async login(email: string, password: string, options?: {
+    onProgress?: (message: string) => void;
+    maxAttempts?: number;
+  }): Promise<UserResponse> {
+    const maxAttempts = options?.maxAttempts || 10;
+    this.authAttempts = 0;
+    
+    // First, verify backend connectivity with progress feedback
+    if (options?.onProgress) {
+      options.onProgress("Checking server connectivity...");
+    }
+    
     try {
       await this.healthCheck();
     } catch (healthError: any) {
-      throw new Error(`Unable to reach server: ${healthError.message}. Please check your network connection.`);
+      const networkQuality = await this.getNetworkQuality();
+      const classification = ErrorClassifier.classifyError(healthError, networkQuality.quality);
+      
+      throw new ClassifiedError(healthError, classification);
     }
 
     const request: LoginRequest = { email, password };
     
-    const response = await this.httpClient.post<UserResponse>(
-      '/api/v1/auth/login',
-      request
-    );
+    return this.executeWithEnhancedRetry(async (attemptNumber: number) => {
+      this.authAttempts = attemptNumber;
+      
+      if (options?.onProgress) {
+        const networkQuality = await this.getNetworkQuality();
+        const progressMessage = UserFeedbackGenerator.generateProgressiveFeedback(
+          attemptNumber,
+          networkQuality.quality,
+          maxAttempts
+        );
+        options.onProgress(progressMessage);
+      }
+      
+      const response = await this.httpClient.post<UserResponse>(
+        '/api/v1/auth/login',
+        request
+      );
 
-    // Store the token for future requests
-    this.httpClient.setBearerToken(response.access_token);
-    this.isAuthenticated = true;
+      // Store the token for future requests
+      this.httpClient.setBearerToken(response.access_token);
+      this.isAuthenticated = true;
+      this.authAttempts = 0;
+      this.lastAuthError = undefined;
 
-    return response;
+      return response;
+    }, maxAttempts);
   }
 
   /**
-   * Register a new user account with pre-connectivity check
+   * Register a new user account with enhanced error handling
    */
-  async register(email: string, password: string): Promise<UserResponse> {
+  async register(email: string, password: string, options?: {
+    onProgress?: (message: string) => void;
+  }): Promise<UserResponse> {
     // First, verify backend connectivity
+    if (options?.onProgress) {
+      options.onProgress("Checking server connectivity...");
+    }
+    
     try {
       await this.healthCheck();
     } catch (healthError: any) {
-      throw new Error(`Unable to reach server: ${healthError.message}. Please check your network connection.`);
+      const networkQuality = await this.getNetworkQuality();
+      const classification = ErrorClassifier.classifyError(healthError, networkQuality.quality);
+      
+      throw new ClassifiedError(healthError, classification);
     }
 
     const request: RegisterRequest = { email, password };
+    
+    if (options?.onProgress) {
+      options.onProgress("Creating account...");
+    }
     
     const response = await this.httpClient.post<UserResponse>(
       '/api/v1/auth/register',
@@ -293,6 +339,104 @@ export class OneShotClient {
   setAuthToken(token: string): void {
     this.httpClient.setBearerToken(token);
     this.isAuthenticated = true;
+  }
+
+  /**
+   * Get current network quality assessment
+   */
+  async getNetworkQuality() {
+    return this.httpClient.getNetworkQuality();
+  }
+
+  /**
+   * Get comprehensive network diagnostics
+   */
+  async getNetworkDiagnostics() {
+    return this.httpClient.getNetworkDiagnostics();
+  }
+
+  /**
+   * Get authentication status and error information
+   */
+  getAuthStatus() {
+    return {
+      isAuthenticated: this.isAuthenticated,
+      attempts: this.authAttempts,
+      lastError: this.lastAuthError
+    };
+  }
+
+  /**
+   * Execute operation with enhanced retry logic and error classification
+   */
+  private async executeWithEnhancedRetry<T>(
+    operation: (attemptNumber: number) => Promise<T>,
+    maxAttempts: number = 10
+  ): Promise<T> {
+    let lastError: any;
+    
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      try {
+        return await operation(attempt);
+      } catch (error: any) {
+        lastError = error;
+        
+        // Get current network quality for error classification
+        const networkQuality = await this.getNetworkQuality();
+        const circuitMetrics = this.httpClient.getCircuitBreakerMetrics();
+        
+        // Classify the error
+        const classification = ErrorClassifier.classifyError(
+          error,
+          networkQuality.quality,
+          circuitMetrics.state,
+          attempt - 1
+        );
+        
+        // Store classified error for status reporting
+        this.lastAuthError = new ClassifiedError(error, classification);
+        
+        // Check if we should retry
+        if (!classification.retryRecommended || attempt >= maxAttempts) {
+          throw this.lastAuthError;
+        }
+        
+        // Wait before next attempt based on network conditions
+        const backoffDelay = this.calculateAdaptiveDelay(attempt, networkQuality.quality);
+        console.log(`Authentication attempt ${attempt} failed, retrying in ${backoffDelay}ms:`, classification.userMessage);
+        
+        await this.delay(backoffDelay);
+      }
+    }
+    
+    // This shouldn't be reached, but just in case
+    throw this.lastAuthError || new Error('Authentication failed after all attempts');
+  }
+
+  /**
+   * Calculate adaptive delay based on attempt number and network quality
+   */
+  private calculateAdaptiveDelay(attemptNumber: number, networkQuality: NetworkQuality): number {
+    const baseDelay = 1000; // 1 second
+    let multiplier: number;
+    
+    switch (networkQuality) {
+      case NetworkQuality.EXCELLENT:
+        multiplier = attemptNumber; // Linear: 1s, 2s, 3s
+        break;
+      case NetworkQuality.GOOD:
+        multiplier = Math.pow(2, attemptNumber - 1); // Exponential: 1s, 2s, 4s, 8s
+        break;
+      case NetworkQuality.FAIR:
+        multiplier = attemptNumber * 1.5; // Extended: 1.5s, 3s, 4.5s, 6s
+        break;
+      case NetworkQuality.POOR:
+      default:
+        multiplier = Math.min(attemptNumber * 3, 30); // Conservative: 3s, 6s, 9s... max 30s
+        break;
+    }
+    
+    return Math.min(baseDelay * multiplier, 30000); // Cap at 30 seconds
   }
 
   private ensureAuthenticated(): void {

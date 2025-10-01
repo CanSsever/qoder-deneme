@@ -1,5 +1,5 @@
 /**
- * HTTP Client with retry logic and error handling
+ * Enhanced HTTP Client with adaptive timeout, retry logic, and circuit breaker
  */
 import {
   HttpClient,
@@ -12,6 +12,8 @@ import {
   OneShotError,
   ErrorCode
 } from './types';
+import { NetworkQualityAssessment, NetworkQuality, ConnectionAssessment } from './network-quality';
+import { CircuitBreaker, CircuitBreakerError, circuitBreakerManager } from './circuit-breaker';
 
 export class FetchHttpClient implements HttpClient {
   private baseUrl: string;
@@ -19,17 +21,32 @@ export class FetchHttpClient implements HttpClient {
   private defaultRetryAttempts: number;
   private defaultRetryDelay: number;
   private bearerToken?: string;
+  private networkAssessment: NetworkQualityAssessment;
+  private circuitBreaker: CircuitBreaker;
+  private lastNetworkAssessment?: ConnectionAssessment;
+  private assessmentCacheTime: number = 30000; // 30 seconds
 
   constructor(
     baseUrl: string,
     timeout = 30000,
-    retryAttempts = 5, // Increased for mobile scenarios
+    retryAttempts = 5,
     retryDelay = 1000
   ) {
     this.baseUrl = baseUrl.replace(/\/$/, ''); // Remove trailing slash
     this.defaultTimeout = timeout;
     this.defaultRetryAttempts = retryAttempts;
     this.defaultRetryDelay = retryDelay;
+    
+    // Initialize network quality assessment
+    this.networkAssessment = new NetworkQualityAssessment(baseUrl);
+    
+    // Initialize circuit breaker for HTTP client
+    this.circuitBreaker = circuitBreakerManager.getBreaker('http-client', {
+      failureThreshold: 5,
+      recoveryTimeout: 30000,
+      successThreshold: 3,
+      monitoringWindow: 60000
+    });
   }
 
   setBearerToken(token: string): void {
@@ -62,9 +79,12 @@ export class FetchHttpClient implements HttpClient {
     data?: any,
     options?: RequestOptions
   ): Promise<T> {
+    // Get adaptive network settings
+    const networkSettings = await this.getAdaptiveNetworkSettings();
+    
     const fullUrl = url.startsWith('http') ? url : `${this.baseUrl}${url}`;
-    const timeout = options?.timeout ?? this.defaultTimeout;
-    const retryAttempts = options?.retryAttempts ?? this.defaultRetryAttempts;
+    const timeout = options?.timeout ?? networkSettings.recommendedTimeout;
+    const retryAttempts = options?.retryAttempts ?? networkSettings.maxRetries;
 
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
@@ -104,7 +124,16 @@ export class FetchHttpClient implements HttpClient {
     }
 
     try {
-      const result = await this.executeWithRetry<T>(fullUrl, requestConfig, retryAttempts);
+      // Execute request through circuit breaker
+      const result = await this.circuitBreaker.execute(async () => {
+        return this.executeWithAdaptiveRetry<T>(
+          fullUrl, 
+          requestConfig, 
+          retryAttempts, 
+          networkSettings
+        );
+      });
+      
       // Clear timeout if request succeeds
       if (timeoutId) {
         clearTimeout(timeoutId);
@@ -115,16 +144,72 @@ export class FetchHttpClient implements HttpClient {
       if (timeoutId) {
         clearTimeout(timeoutId);
       }
+      
+      // Handle circuit breaker errors specially
+      if (error instanceof CircuitBreakerError) {
+        throw new NetworkError(
+          `Service temporarily unavailable: ${error.message}. Circuit breaker is ${error.circuitState}.`
+        );
+      }
+      
       throw error;
     }
   }
 
-  private async executeWithRetry<T>(
+  /**
+   * Get adaptive network settings based on current conditions
+   */
+  private async getAdaptiveNetworkSettings(): Promise<ConnectionAssessment> {
+    // Return cached assessment if still fresh
+    if (this.lastNetworkAssessment && 
+        Date.now() - this.lastNetworkAssessment.metrics.timestamp < this.assessmentCacheTime) {
+      return this.lastNetworkAssessment;
+    }
+
+    try {
+      // Perform fresh network assessment
+      this.lastNetworkAssessment = await this.networkAssessment.assessNetworkQuality();
+      console.log('Network assessment completed:', {
+        quality: this.lastNetworkAssessment.quality,
+        latency: this.lastNetworkAssessment.metrics.latency,
+        timeout: this.lastNetworkAssessment.recommendedTimeout,
+        retries: this.lastNetworkAssessment.maxRetries
+      });
+      
+      return this.lastNetworkAssessment;
+    } catch (error) {
+      console.warn('Network assessment failed, using fallback settings:', error);
+      
+      // Return conservative fallback settings
+      return {
+        quality: NetworkQuality.POOR,
+        metrics: {
+          latency: 2000,
+          bandwidth: 64,
+          stability: 50,
+          errorRate: 20,
+          timestamp: Date.now()
+        },
+        recommendedTimeout: 60000,
+        maxRetries: 10,
+        backoffStrategy: {
+          type: 'conservative',
+          baseDelay: 3000,
+          maxDelay: 30000,
+          multiplier: 2
+        }
+      };
+    }
+  }
+
+  private async executeWithAdaptiveRetry<T>(
     url: string,
     config: RequestInit,
-    retriesLeft: number
+    retriesLeft: number,
+    networkSettings: ConnectionAssessment
   ): Promise<T> {
-    const attemptNumber = this.defaultRetryAttempts - retriesLeft + 1;
+    const attemptNumber = networkSettings.maxRetries - retriesLeft + 1;
+    const { backoffStrategy } = networkSettings;
     
     try {
       const response = await fetch(url, config);
@@ -137,20 +222,64 @@ export class FetchHttpClient implements HttpClient {
       }
       
       if (this.shouldRetry(error, retriesLeft)) {
-        // Progressive backoff: 1s, 2s, 4s, 8s, 16s
-        const backoffDelay = this.defaultRetryDelay * Math.pow(2, attemptNumber - 1);
-        console.warn(`Request failed, retrying in ${backoffDelay}ms (attempt ${attemptNumber}/${this.defaultRetryAttempts})`, {
+        // Calculate adaptive backoff delay
+        const backoffDelay = this.calculateBackoffDelay(
+          attemptNumber,
+          backoffStrategy
+        );
+        
+        console.warn(`Request failed, retrying in ${backoffDelay}ms`, {
           url,
           error: error.message,
           attemptNumber,
-          retriesLeft
+          retriesLeft,
+          networkQuality: networkSettings.quality,
+          backoffStrategy: backoffStrategy.type
         });
         
         await this.delay(backoffDelay);
-        return this.executeWithRetry<T>(url, config, retriesLeft - 1);
+        return this.executeWithAdaptiveRetry<T>(url, config, retriesLeft - 1, networkSettings);
       }
       throw this.normalizeError(error);
     }
+  }
+
+  /**
+   * Calculate backoff delay based on strategy and attempt number
+   */
+  private calculateBackoffDelay(
+    attemptNumber: number,
+    strategy: ConnectionAssessment['backoffStrategy']
+  ): number {
+    let delay: number;
+    
+    switch (strategy.type) {
+      case 'linear':
+        delay = strategy.baseDelay * attemptNumber;
+        break;
+        
+      case 'exponential':
+        delay = strategy.baseDelay * Math.pow(strategy.multiplier, attemptNumber - 1);
+        break;
+        
+      case 'extended':
+        // Custom extended backoff: 2s, 4s, 6s, 8s, 12s, 16s, 20s
+        const extendedDelays = [2000, 4000, 6000, 8000, 12000, 16000, 20000];
+        delay = extendedDelays[Math.min(attemptNumber - 1, extendedDelays.length - 1)] || strategy.maxDelay;
+        break;
+        
+      case 'conservative':
+        // Conservative backoff: 3s, 5s, 7s, 10s, 15s, 20s, 25s, 30s
+        const conservativeDelays = [3000, 5000, 7000, 10000, 15000, 20000, 25000, 30000];
+        delay = conservativeDelays[Math.min(attemptNumber - 1, conservativeDelays.length - 1)] || strategy.maxDelay;
+        break;
+        
+      default:
+        delay = strategy.baseDelay * Math.pow(2, attemptNumber - 1);
+    }
+    
+    // Ensure delay doesn't exceed maximum
+    return Math.min(delay, strategy.maxDelay);
   }
 
   private async handleResponse<T>(response: Response): Promise<T> {
@@ -227,5 +356,58 @@ export class FetchHttpClient implements HttpClient {
 
   private async delay(ms: number): Promise<void> {
     return new Promise(resolve => setTimeout(resolve, ms));
+  }
+
+  /**
+   * Get current network quality assessment
+   */
+  async getNetworkQuality(): Promise<ConnectionAssessment> {
+    return this.getAdaptiveNetworkSettings();
+  }
+
+  /**
+   * Force refresh network assessment
+   */
+  async refreshNetworkAssessment(): Promise<ConnectionAssessment> {
+    this.lastNetworkAssessment = undefined;
+    return this.getAdaptiveNetworkSettings();
+  }
+
+  /**
+   * Get circuit breaker metrics
+   */
+  getCircuitBreakerMetrics() {
+    return this.circuitBreaker.getMetrics();
+  }
+
+  /**
+   * Reset circuit breaker (for testing or recovery)
+   */
+  resetCircuitBreaker(): void {
+    this.circuitBreaker.forceReset();
+  }
+
+  /**
+   * Get network diagnostics information
+   */
+  async getNetworkDiagnostics(): Promise<{
+    networkQuality: ConnectionAssessment;
+    circuitBreaker: any;
+    lastErrors: string[];
+  }> {
+    const networkQuality = await this.getNetworkQuality();
+    const circuitMetrics = this.getCircuitBreakerMetrics();
+    
+    return {
+      networkQuality,
+      circuitBreaker: {
+        state: circuitMetrics.state,
+        uptime: circuitMetrics.uptime,
+        totalRequests: circuitMetrics.totalRequests,
+        totalFailures: circuitMetrics.totalFailures,
+        description: this.circuitBreaker.getStateDescription()
+      },
+      lastErrors: [] // Could be enhanced to track recent errors
+    };
   }
 }
