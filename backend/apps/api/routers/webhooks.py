@@ -3,6 +3,7 @@ Webhooks router for payment provider integrations.
 
 Handles incoming webhooks from payment providers like Superwall,
 with HMAC signature verification and idempotent event processing.
+Migrated to use Supabase with proper RLS enforcement.
 """
 
 import hashlib
@@ -11,14 +12,11 @@ import json
 from datetime import datetime, timedelta
 from typing import Dict, Any, Optional
 from fastapi import APIRouter, Request, HTTPException, Depends, Header
-from sqlmodel import Session, select
 import structlog
 
 from apps.core.settings import settings
 from apps.core.exceptions import ValidationError
-from apps.db.session import get_session
-from apps.db.models.subscription import Subscription, UserEntitlement, PLAN_TEMPLATES
-from apps.db.models.user import User
+from apps.core.supa_request import service_client
 from apps.api.services.entitlements import EntitlementsService
 
 router = APIRouter(prefix="/webhooks", tags=["webhooks"])
@@ -63,7 +61,6 @@ def verify_superwall_signature(payload: bytes, signature: str, secret: str) -> b
 @router.post("/superwall")
 async def superwall_webhook(
     request: Request,
-    session: Session = Depends(get_session),
     x_superwall_signature: Optional[str] = Header(None)
 ):
     """
@@ -125,30 +122,29 @@ async def superwall_webhook(
         )
         
         # Check for idempotency - has this event been processed already?
-        existing_subscription = session.exec(
-            select(Subscription).where(Subscription.event_id == event_id)
-        ).first()
+        service_cli = service_client()
+        existing_subscription = service_cli.table("subscriptions").select("id").eq("event_id", event_id).execute()
         
-        if existing_subscription:
+        if existing_subscription.data:
             logger.info(
                 "Event already processed (idempotent)",
                 event_id=event_id,
-                existing_subscription_id=existing_subscription.id
+                existing_subscription_id=existing_subscription.data[0]["id"]
             )
             return {
                 "status": "success",
                 "message": "Event already processed",
-                "subscription_id": existing_subscription.id
+                "subscription_id": existing_subscription.data[0]["id"]
             }
         
         # Validate that user exists
-        user = session.get(User, user_id)
-        if not user:
+        user_check = service_cli.table("profiles").select("id").eq("id", user_id).execute()
+        if not user_check.data:
             logger.error("User not found", user_id=user_id)
             raise HTTPException(status_code=404, detail="User not found")
         
         # Process the event based on type
-        result = await process_superwall_event(session, event_data)
+        result = await process_superwall_event(event_data)
         
         return {
             "status": "success",
@@ -163,12 +159,11 @@ async def superwall_webhook(
         raise HTTPException(status_code=500, detail="Internal server error")
 
 
-async def process_superwall_event(session: Session, event_data: Dict[str, Any]) -> Dict[str, Any]:
-    """
+async def process_superwall_event(event_data: Dict[str, Any]) -> Dict[str, Any]:
+    """    
     Process Superwall event and update subscription/entitlements.
     
     Args:
-        session: Database session
         event_data: Parsed webhook event data
         
     Returns:
@@ -190,31 +185,34 @@ async def process_superwall_event(session: Session, event_data: Dict[str, Any]) 
     # Map product_id to plan_code
     plan_code = map_product_to_plan(product_id)
     
-    # Create subscription record
-    subscription = Subscription(
-        user_id=user_id,
-        product_id=product_id,
-        status=event_data.get("status", "active"),
-        expires_at=expires_at,
-        event_id=event_id,
-        raw_payload_json=json.dumps(event_data),
-        provider="superwall",
-        provider_subscription_id=event_data.get("subscription_id")
-    )
+    # Create subscription record using service client
+    service_cli = service_client()
+    subscription_data = {
+        "user_id": user_id,
+        "product_id": product_id,
+        "status": event_data.get("status", "active"),
+        "expires_at": expires_at.isoformat() if expires_at else None,
+        "event_id": event_id,
+        "raw_payload_json": json.dumps(event_data),
+        "provider": "superwall",
+        "provider_subscription_id": event_data.get("subscription_id")
+    }
     
-    session.add(subscription)
-    session.flush()  # Get the ID without committing
+    subscription_result = service_cli.table("subscriptions").insert(subscription_data).execute()
+    
+    if not subscription_result.data:
+        raise HTTPException(status_code=500, detail="Failed to create subscription record")
+    
+    subscription = subscription_result.data[0]
     
     # Process based on event type
     if event_type in ["subscription_start", "subscription_update"]:
-        result = await handle_subscription_activation(session, user_id, plan_code, subscription, expires_at)
+        result = await handle_subscription_activation(user_id, plan_code, subscription, expires_at)
     elif event_type == "subscription_end":
-        result = await handle_subscription_deactivation(session, user_id, subscription)
+        result = await handle_subscription_deactivation(user_id, subscription)
     else:
         logger.warning("Unknown event type", event_type=event_type)
         result = {"action": "logged", "note": f"Unknown event type: {event_type}"}
-    
-    session.commit()
     
     logger.info(
         "Processed Superwall event",
@@ -225,21 +223,19 @@ async def process_superwall_event(session: Session, event_data: Dict[str, Any]) 
         result=result
     )
     
-    return {"subscription_id": subscription.id, **result}
+    return {"subscription_id": subscription["id"], **result}
 
 
 async def handle_subscription_activation(
-    session: Session, 
     user_id: str, 
     plan_code: str, 
-    subscription: Subscription,
+    subscription: Dict[str, Any],
     expires_at: Optional[datetime]
 ) -> Dict[str, Any]:
-    """
+    """    
     Handle subscription activation or update.
     
     Args:
-        session: Database session
         user_id: User identifier
         plan_code: Plan code (free, pro, premium)
         subscription: Subscription record
@@ -248,78 +244,111 @@ async def handle_subscription_activation(
     Returns:
         Dictionary with activation results
     """
-    with EntitlementsService(session) as entitlements:
-        # Create new entitlement
-        effective_from = datetime.utcnow()
-        effective_to = expires_at if expires_at else None
+    # Create new entitlement using Supabase
+    effective_from = datetime.utcnow()
+    effective_to = expires_at if expires_at else None
+    
+    service_cli = service_client()
+    
+    # End current entitlements for user
+    if effective_to:
+        service_cli.table("user_entitlements").update({
+            "effective_to": effective_from.isoformat()
+        }).eq("user_id", user_id).is_("effective_to", "null").execute()
+    
+    # Get plan template for limits
+    plan_templates = {
+        "free": {"limits": {"daily_jobs": 3, "concurrent_jobs": 1, "max_side": 512, "features": ["face_restore"]}},
+        "pro": {"limits": {"daily_jobs": 50, "concurrent_jobs": 3, "max_side": 1024, "features": ["face_restore", "face_swap"]}},
+        "premium": {"limits": {"daily_jobs": 200, "concurrent_jobs": 5, "max_side": 2048, "features": ["face_restore", "face_swap", "upscale"]}}
+    }
+    
+    limits = plan_templates.get(plan_code, plan_templates["free"])["limits"]
+    
+    entitlement_data = {
+        "user_id": user_id,
+        "plan_code": plan_code,
+        "limits_json": json.dumps(limits),
+        "effective_from": effective_from.isoformat(),
+        "effective_to": effective_to.isoformat() if effective_to else None
+    }
+    
+    entitlement_result = service_cli.table("user_entitlements").insert(entitlement_data).execute()
+    
+    if not entitlement_result.data:
+        raise HTTPException(status_code=500, detail="Failed to create entitlement")
+    
+    entitlement = entitlement_result.data[0]
         
-        entitlement = entitlements.create_entitlement(
-            user_id=user_id,
-            plan_code=plan_code,
-            effective_from=effective_from,
-            effective_to=effective_to
-        )
-        
-        limits = entitlement.get_limits()
-        
-        logger.info(
-            "Activated subscription",
-            user_id=user_id,
-            plan_code=plan_code,
-            entitlement_id=entitlement.id,
-            daily_jobs=limits.get("daily_jobs"),
-            features=limits.get("features")
-        )
-        
-        return {
-            "action": "activated",
-            "plan_code": plan_code,
-            "entitlement_id": entitlement.id,
-            "limits": limits
-        }
+    logger.info(
+        "Activated subscription",
+        user_id=user_id,
+        plan_code=plan_code,
+        entitlement_id=entitlement["id"],
+        daily_jobs=limits.get("daily_jobs"),
+        features=limits.get("features")
+    )
+    
+    return {
+        "action": "activated",
+        "plan_code": plan_code,
+        "entitlement_id": entitlement["id"],
+        "limits": limits
+    }
 
 
 async def handle_subscription_deactivation(
-    session: Session, 
     user_id: str, 
-    subscription: Subscription
+    subscription: Dict[str, Any]
 ) -> Dict[str, Any]:
-    """
+    """    
     Handle subscription deactivation/cancellation.
     
     Args:
-        session: Database session
         user_id: User identifier
         subscription: Subscription record
         
     Returns:
         Dictionary with deactivation results
     """
-    with EntitlementsService(session) as entitlements:
-        # End current entitlements
-        now = datetime.utcnow()
-        entitlements._end_active_entitlements(user_id, now)
+    service_cli = service_client()
+    
+    # End current entitlements
+    now = datetime.utcnow()
+    service_cli.table("user_entitlements").update({
+        "effective_to": now.isoformat()
+    }).eq("user_id", user_id).is_("effective_to", "null").execute()
+    
+    # Create free plan entitlement
+    default_plan = settings.entitlements_default_plan or "free"
+    limits = {"daily_jobs": 3, "concurrent_jobs": 1, "max_side": 512, "features": ["face_restore"]}
+    
+    entitlement_data = {
+        "user_id": user_id,
+        "plan_code": default_plan,
+        "limits_json": json.dumps(limits),
+        "effective_from": now.isoformat()
+    }
+    
+    entitlement_result = service_cli.table("user_entitlements").insert(entitlement_data).execute()
+    
+    if not entitlement_result.data:
+        raise HTTPException(status_code=500, detail="Failed to create default entitlement")
+    
+    entitlement = entitlement_result.data[0]
         
-        # Create free plan entitlement
-        default_plan = settings.entitlements_default_plan
-        entitlement = entitlements.create_entitlement(
-            user_id=user_id,
-            plan_code=default_plan,
-            effective_from=now
-        )
-        
-        logger.info(
-            "Deactivated subscription",
-            user_id=user_id,
-            reverted_to_plan=default_plan,
-            entitlement_id=entitlement.id
-        )
-        
-        return {
-            "action": "deactivated",
-            "reverted_to_plan": default_plan,
-            "entitlement_id": entitlement.id
-        }
+    logger.info(
+        "Deactivated subscription",
+        user_id=user_id,
+        reverted_to_plan=default_plan,
+        entitlement_id=entitlement["id"]
+    )
+    
+    return {
+        "action": "deactivated",
+        "reverted_to_plan": default_plan,
+        "entitlement_id": entitlement["id"]
+    }
 
 
 def map_product_to_plan(product_id: str) -> str:
@@ -347,9 +376,15 @@ def map_product_to_plan(product_id: str) -> str:
     plan_code = product_mapping.get(product_id, "free")
     
     # Validate plan code exists
-    if plan_code not in PLAN_TEMPLATES:
+    plan_templates = {
+        "free": True,
+        "pro": True, 
+        "premium": True
+    }
+    
+    if plan_code not in plan_templates:
         logger.warning("Unknown plan code mapped from product", product_id=product_id, plan_code=plan_code)
-        plan_code = settings.entitlements_default_plan
+        plan_code = settings.entitlements_default_plan or "free"
     
     return plan_code
 

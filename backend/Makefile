@@ -389,3 +389,27 @@ etl-example:
 	@echo "📊 Running ETL example (template)..."
 	@echo "⚠️  This is a template script. Review and customize before running with real data."
 	python tools/etl_example.py
+
+# =======================
+# Supabase Migration Verification
+# =======================
+
+# Run comprehensive audit of migration
+audit:
+	@echo "🔍 Running Supabase migration audit..."
+	bash ../tools/audit_summary.sh
+
+# Test RLS isolation between users
+test-rls:
+	@echo "🔒 Testing RLS isolation between users..."
+	@if [ -z "$$TOKEN_A" ] || [ -z "$$TOKEN_B" ]; then \
+		echo "❌ TOKEN_A and TOKEN_B environment variables required"; \
+		echo "Set TOKEN_A=<jwt_user_a> TOKEN_B=<jwt_user_b>"; \
+		exit 1; \
+	fi
+	TOKEN_A=$$TOKEN_A TOKEN_B=$$TOKEN_B bash backend/tests/smoke_rls.sh
+
+# Scan for service role leaks in user paths
+scan-service-role:
+	@echo "🔍 Scanning for service role leaks in user paths..."
+	bash ../tools/scan_service_role_leaks.sh

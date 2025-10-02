@@ -1,5 +1,35 @@
-#!/bin/bash
+#!/usr/bin/env bash
 set -euo pipefail
+API=${API:-http://localhost:8000}
+: "${TOKEN_A:?set TOKEN_A}"
+: "${TOKEN_B:?set TOKEN_B}"
+
+# 401 without token
+code=$(curl -s -o /dev/null -w "%{http_code}" $API/api/bootstrap-profile)
+[ "$code" = "401" ] || { echo "Expected 401 without token"; exit 1; }
+
+# bootstrap
+curl -fsS -H "Authorization: Bearer $TOKEN_A" $API/api/bootstrap-profile >/dev/null
+curl -fsS -H "Authorization: Bearer $TOKEN_B" $API/api/bootstrap-profile >/dev/null
+
+# A creates job
+JOB_JSON=$(curl -fsS -X POST $API/api/jobs \
+ -H "Authorization: Bearer $TOKEN_A" -H "Content-Type: application/json" \
+ -d '{"job_type":"restore","input_image_url":"uploads/UID_A/in.png","parameters":{"model":"gfpgan"}}')
+JOB_ID=$(python - <<'PY'
+import json,sys;print(json.load(sys.stdin)['id'])
+PY <<<"$JOB_JSON")
+[ -n "$JOB_ID" ]
+
+# B must not see A's job
+LIST_B=$(curl -fsS -H "Authorization: Bearer $TOKEN_B" $API/api/jobs)
+python - <<PY
+import json,sys,os
+data=json.loads(os.environ['LIST_B'])
+jid=os.environ['JOB_ID']
+assert all(j.get('id')!=jid for j in data), 'RLS LEAK: B sees A job'
+print('RLS isolation OK')
+PY
 
 # RLS Smoke Test for Supabase Migration
 # Tests that Row Level Security is properly enforced

@@ -8,7 +8,7 @@ from slowapi.util import get_remote_address
 from pydantic import BaseModel, validator
 from typing import Dict, Any
 from apps.api.services import UploadService
-from apps.core.security import get_current_active_user, SupabaseUser
+from apps.core.security import get_current_active_user, get_raw_token, SupabaseUser
 from apps.core.settings import settings
 
 logger = structlog.get_logger()
@@ -70,7 +70,8 @@ class UploadInstructionsRequest(BaseModel):
 async def get_upload_instructions(
     request: Request,
     upload_request: UploadInstructionsRequest,
-    current_user: SupabaseUser = Depends(get_current_active_user)
+    current_user: SupabaseUser = Depends(get_current_active_user),
+    user_token: str = Depends(get_raw_token)
 ) -> Dict[str, Any]:
     """Get upload instructions for Supabase Storage client-direct upload."""
     
@@ -83,7 +84,7 @@ async def get_upload_instructions(
     
     try:
         instructions = UploadService.get_upload_instructions(
-            user_id=current_user.id,
+            user_jwt=user_token,
             filename=upload_request.filename,
             content_type=upload_request.content_type,
             file_size=upload_request.file_size
@@ -116,7 +117,8 @@ async def get_upload_instructions(
 async def get_download_url(
     file_path: str,
     expires_in: int = 3600,
-    current_user: SupabaseUser = Depends(get_current_active_user)
+    current_user: SupabaseUser = Depends(get_current_active_user),
+    user_token: str = Depends(get_raw_token)
 ) -> Dict[str, Any]:
     """Get signed download URL for uploaded file."""
     
@@ -128,7 +130,7 @@ async def get_download_url(
         )
     
     try:
-        download_url = UploadService.get_download_url(file_path, expires_in)
+        download_url = UploadService.get_download_url(user_token, file_path, expires_in)
         
         if not download_url:
             raise HTTPException(

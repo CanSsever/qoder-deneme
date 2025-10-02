@@ -10,8 +10,9 @@ from slowapi import Limiter
 from slowapi.util import get_remote_address
 from pydantic import BaseModel, validator
 from apps.api.services import JobService
-from apps.core.security import get_current_active_user, get_raw_token, SupabaseUser
+from apps.core.security import get_current_active_user, get_raw_token, SupabaseUser, require_token
 from apps.core.exceptions import ValidationError, InsufficientCreditsError
+from apps.worker.providers import get_provider
 
 logger = structlog.get_logger()
 limiter = Limiter(key_func=get_remote_address)
@@ -28,7 +29,7 @@ class JobCreateRequest(BaseModel):
     
     @validator('job_type')
     def validate_job_type(cls, v):
-        valid_types = ["face_restoration", "face_swap", "upscale"]
+        valid_types = ["face_restoration", "face_swap", "upscale", "restore"]
         if v not in valid_types:
             raise ValueError(f"Invalid job type. Must be one of: {valid_types}")
         return v
@@ -174,3 +175,32 @@ async def list_jobs(
             "count": len(jobs)
         }
     }
+
+
+@router.post("/{job_id}/run")
+def run_job(job_id: str, token: str = Depends(require_token)):
+    """Run a job with the configured provider (idempotent)."""
+    from apps.core.supa_request import user_client
+    
+    cli = user_client(token)
+    job = cli.table("jobs").select("*").eq("id", job_id).single().execute().data
+    if not job:
+        raise HTTPException(404, "Job not found")
+    if job.get("status") == "succeeded" and job.get("output_image_url"):
+        return {"status": "succeeded", "job": job}  # idempotent
+
+    cli.table("jobs").update({"status": "running"}).eq("id", job_id).execute()
+    provider = get_provider()
+    try:
+        if job["job_type"] == "restore":
+            result = provider.restore(token=token, job=job)
+        elif job["job_type"] == "upscale":
+            result = provider.upscale(token=token, job=job)
+        else:
+            raise HTTPException(400, "Unsupported job_type")
+        upd = {"status": "succeeded", "progress": 1.0, "output_image_url": result["output_path"]}
+        job2 = cli.table("jobs").update(upd).eq("id", job_id).execute().data[0]
+        return {"status": "succeeded", "job": job2}
+    except Exception as e:
+        job2 = cli.table("jobs").update({"status": "failed", "error_message": str(e)}).eq("id", job_id).execute().data[0]
+        raise HTTPException(500, f"Processing failed: {e}")

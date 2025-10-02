@@ -24,42 +24,60 @@ class ProfileService:
     """Profile service for user management using Supabase."""
     
     @staticmethod
-    def get_or_create_profile(user: SupabaseUser) -> Optional[Dict[str, Any]]:
-        """Get or create user profile from Supabase."""
+    def get_or_create_profile(user: SupabaseUser, user_jwt: str) -> Optional[Dict[str, Any]]:
+        """Get or create user profile from Supabase using user-scoped client."""
         try:
-            # Try to get existing profile
-            profile = supabase_client.get_profile(user.id)
+            # Use user client for RLS enforcement
+            client = user_client(user_jwt)
             
-            if profile is None:
-                # Create new profile using RPC function
-                response = supabase_client.client.rpc(
-                    "bootstrap_user_profile",
-                    {
-                        "user_id": user.id,
-                        "user_email": user.email,
-                        "initial_credits": settings.default_credits
-                    }
-                ).execute()
-                
-                if response.data:
-                    # Get the created profile
-                    profile = supabase_client.get_profile(user.id)
-                
-            return profile
+            # Try to get existing profile
+            profile_result = client.table("profiles").select("*").eq("id", user.id).execute()
+            
+            if profile_result.data:
+                return profile_result.data[0]
+            
+            # Create new profile using RPC function with user auth
+            response = client.rpc(
+                "bootstrap_user_profile",
+                {
+                    "user_id": user.id,
+                    "user_email": user.email,
+                    "initial_credits": settings.default_credits
+                }
+            ).execute()
+            
+            if response.data:
+                # Get the created profile
+                profile_result = client.table("profiles").select("*").eq("id", user.id).execute()
+                return profile_result.data[0] if profile_result.data else None
+            
+            return None
             
         except Exception as e:
             logger.error(f"Failed to get or create profile for user {user.id}: {e}")
             return None
     
     @staticmethod
-    def update_profile(user_id: str, updates: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-        """Update user profile."""
-        return supabase_client.update_profile(user_id, updates)
+    def update_profile(user_jwt: str, updates: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """Update user profile using user-scoped client."""
+        try:
+            client = user_client(user_jwt)
+            response = client.table("profiles").update(updates).execute()
+            return response.data[0] if response.data else None
+        except Exception as e:
+            logger.error(f"Failed to update profile: {e}")
+            return None
     
     @staticmethod
-    def get_profile(user_id: str) -> Optional[Dict[str, Any]]:
-        """Get user profile by ID."""
-        return supabase_client.get_profile(user_id)
+    def get_profile(user_jwt: str) -> Optional[Dict[str, Any]]:
+        """Get user profile using user-scoped client."""
+        try:
+            client = user_client(user_jwt)
+            response = client.table("profiles").select("*").execute()
+            return response.data[0] if response.data else None
+        except Exception as e:
+            logger.error(f"Failed to get profile: {e}")
+            return None
 
 
 class UploadService:
@@ -67,12 +85,12 @@ class UploadService:
     
     @staticmethod
     def get_upload_instructions(
-        user_id: str,
+        user_jwt: str,
         filename: str, 
         content_type: str, 
         file_size: int
     ) -> Dict[str, Any]:
-        """Get upload instructions for Supabase Storage."""
+        """Get upload instructions for Supabase Storage using user authentication."""
         # Validate file size
         max_size = settings.max_file_size_mb * 1024 * 1024  # Convert to bytes
         if file_size > max_size:
@@ -81,6 +99,16 @@ class UploadService:
         # Validate content type
         if not content_type.startswith('image/'):
             raise ValidationError("Only image files are allowed")
+        
+        # Extract user ID from JWT token
+        try:
+            import jwt
+            payload = jwt.decode(user_jwt, settings.supabase_jwt_secret, algorithms=["HS256"])
+            user_id = payload.get("sub")
+            if not user_id:
+                raise ValidationError("Invalid token")
+        except Exception as e:
+            raise ValidationError("Token validation failed")
         
         # Generate unique file path
         file_extension = os.path.splitext(filename)[1]
@@ -92,16 +120,22 @@ class UploadService:
             "file_path": file_path,
             "upload_url": f"{settings.supabase_url}/storage/v1/object/uploads/{file_path}",
             "headers": {
-                "Authorization": f"Bearer {settings.supabase_anon_key}",
+                "Authorization": f"Bearer {user_jwt}",  # Use user JWT, not anon key
                 "Content-Type": content_type
             },
             "method": "POST"
         }
     
     @staticmethod
-    def get_download_url(file_path: str, expires_in: int = 3600) -> Optional[str]:
-        """Get signed download URL for uploaded file."""
-        return supabase_client.get_download_url("uploads", file_path, expires_in)
+    def get_download_url(user_jwt: str, file_path: str, expires_in: int = 3600) -> Optional[str]:
+        """Get signed download URL for uploaded file using user authentication."""
+        try:
+            client = user_client(user_jwt)
+            response = client.storage.from_("uploads").create_signed_url(file_path, expires_in)
+            return response.get("signedURL")
+        except Exception as e:
+            logger.error(f"Failed to get download URL: {e}")
+            return None
     
     @staticmethod
     def get_public_url(bucket: str, file_path: str) -> str:
@@ -116,7 +150,9 @@ class JobService:
     CREDIT_COSTS = {
         "face_swap": 2,
         "face_restore": 1,
-        "upscale": 1
+        "face_restoration": 1,
+        "upscale": 1,
+        "restore": 1
     }
     
     @staticmethod

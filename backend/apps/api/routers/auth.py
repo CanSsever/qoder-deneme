@@ -20,7 +20,8 @@ router = APIRouter(tags=["authentication"])
 @router.post("/bootstrap-profile")
 async def bootstrap_profile(
     request: Request,
-    current_user: SupabaseUser = Depends(get_current_active_user)
+    current_user: SupabaseUser = Depends(get_current_active_user),
+    user_token: str = Depends(get_raw_token)
 ) -> Dict[str, Any]:
     """Bootstrap user profile after Supabase authentication.
     
@@ -38,8 +39,8 @@ async def bootstrap_profile(
     )
     
     try:
-        # Get or create profile
-        profile = ProfileService.get_or_create_profile(current_user)
+        # Get or create profile using user JWT token
+        profile = ProfileService.get_or_create_profile(current_user, user_token)
         
         if not profile:
             raise HTTPException(
@@ -83,19 +84,20 @@ async def bootstrap_profile(
 @router.get("/profile")
 async def get_current_user_profile(
     request: Request,
-    current_user: SupabaseUser = Depends(get_current_active_user)
+    current_user: SupabaseUser = Depends(get_current_active_user),
+    user_token: str = Depends(get_raw_token)
 ) -> Dict[str, Any]:
     """Get current user profile information."""
     start_time = time.time()
     client_ip = request.client.host if request.client else "unknown"
     
     try:
-        # Get profile from Supabase
-        profile = ProfileService.get_profile(current_user.id)
+        # Get profile from Supabase using user token
+        profile = ProfileService.get_profile(user_token)
         
         if not profile:
             # Try to bootstrap profile if it doesn't exist
-            profile = ProfileService.get_or_create_profile(current_user)
+            profile = ProfileService.get_or_create_profile(current_user, user_token)
         
         if not profile:
             raise HTTPException(
@@ -103,8 +105,8 @@ async def get_current_user_profile(
                 detail="Profile not found"
             )
         
-        # Get recent credit transactions
-        credit_transactions = CreditService.get_credit_transactions(current_user.id, limit=10)
+        # Get recent credit transactions using user token
+        credit_transactions = CreditService.get_credit_transactions(user_token, limit=10)
         
         duration_ms = int((time.time() - start_time) * 1000)
         
