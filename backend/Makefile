@@ -11,6 +11,11 @@ help:
 	@echo "  make migrate    - Run database migrations"
 	@echo "  make bootstrap  - Bootstrap database with default data"
 	@echo ""
+	@echo "Migration (Supabase):"
+	@echo "  make migrate-users      - Invite legacy users to Supabase"
+	@echo "  make migrate-users-dry  - Preview user migration (dry run)"
+	@echo "  make smoke-rls          - Test RLS enforcement"
+	@echo ""
 	@echo "Testing:"
 	@echo "  make test       - Run tests"
 	@echo "  make test-e2e   - Run E2E tests with mock providers"
@@ -342,3 +347,45 @@ retention:custom:
 retention:test:
 	@echo "🧪 Running privacy and retention tests..."
 	python -m pytest tests/test_privacy_safety.py -v --tb=short
+
+# =======================
+# Supabase Migration Commands
+# =======================
+
+# Invite legacy users to migrate to Supabase (production)
+migrate-users:
+	@echo "👥 Inviting legacy users to migrate to Supabase..."
+	@if [ ! -f "data/legacy_users.csv" ]; then \
+		echo "❌ data/legacy_users.csv not found. Please export users first."; \
+		exit 1; \
+	fi
+	python tools/invite_existing_users.py --csv data/legacy_users.csv
+
+# Preview user migration (dry run)
+migrate-users-dry:
+	@echo "👥 Previewing user migration (dry run)..."
+	@if [ ! -f "data/legacy_users.csv" ]; then \
+		echo "❌ data/legacy_users.csv not found. Please export users first."; \
+		exit 1; \
+	fi
+	python tools/invite_existing_users.py --csv data/legacy_users.csv --dry-run
+
+# Test RLS enforcement with smoke tests
+smoke-rls:
+	@echo "🔒 Testing Row Level Security enforcement..."
+	@if [ -z "$$TOKEN" ]; then \
+		echo "❌ TOKEN environment variable required. Set TOKEN=<supabase_user_jwt>"; \
+		exit 1; \
+	fi
+	bash tests/smoke_rls.sh
+
+# Install ETL dependencies (separate from runtime)
+install-etl:
+	@echo "📊 Installing ETL dependencies..."
+	pip install -r requirements-etl.txt
+
+# Run ETL example (template)
+etl-example:
+	@echo "📊 Running ETL example (template)..."
+	@echo "⚠️  This is a template script. Review and customize before running with real data."
+	python tools/etl_example.py

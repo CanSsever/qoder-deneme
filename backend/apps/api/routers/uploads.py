@@ -1,15 +1,14 @@
 """
-Advanced upload router with comprehensive validation and monitoring.
+Supabase Storage upload router with client-direct uploads.
 """
 import structlog
 from fastapi import APIRouter, Depends, HTTPException, Request
-from sqlmodel import SQLModel
 from slowapi import Limiter
 from slowapi.util import get_remote_address
-from pydantic import validator
-from apps.api.services.uploads import UploadService
-from apps.core.security import get_current_active_user
-from apps.db.models.user import User
+from pydantic import BaseModel, validator
+from typing import Dict, Any
+from apps.api.services import UploadService
+from apps.core.security import get_current_active_user, SupabaseUser
 from apps.core.settings import settings
 
 logger = structlog.get_logger()
@@ -29,8 +28,8 @@ ALLOWED_MIME_TYPES = {
 MAX_FILE_SIZE = 20 * 1024 * 1024
 
 
-class PresignRequest(SQLModel):
-    """Advanced request schema for presigned URL generation with validation."""
+class UploadInstructionsRequest(BaseModel):
+    """Request schema for upload instructions with validation."""
     filename: str
     content_type: str
     file_size: int
@@ -66,59 +65,88 @@ class PresignRequest(SQLModel):
         return v
 
 
-class PresignResponse(SQLModel):
-    """Response schema for presigned URL."""
-    presigned_url: str
-    upload_id: str
-    expires_in: int
-    max_file_size: int
-    allowed_mime_types: list
-
-
-@router.post("/presign", response_model=PresignResponse)
+@router.post("/instructions")
 @limiter.limit("20/minute")  # Rate limit: 20 uploads per minute
-async def generate_presigned_url(
+async def get_upload_instructions(
     request: Request,
-    upload_request: PresignRequest,
-    current_user: User = Depends(get_current_active_user)
-):
-    """Generate S3 presigned URL for image upload with comprehensive validation."""
+    upload_request: UploadInstructionsRequest,
+    current_user: SupabaseUser = Depends(get_current_active_user)
+) -> Dict[str, Any]:
+    """Get upload instructions for Supabase Storage client-direct upload."""
     
-    logger.info("Presigned URL request", 
-               user_id=str(current_user.id),
+    logger.info("Upload instructions request", 
+               user_id=current_user.id,
                filename=upload_request.filename,
                content_type=upload_request.content_type,
                file_size=upload_request.file_size,
                remote_addr=get_remote_address(request))
     
     try:
-        upload_service = UploadService()
-        result = upload_service.generate_presigned_url(
+        instructions = UploadService.get_upload_instructions(
+            user_id=current_user.id,
             filename=upload_request.filename,
             content_type=upload_request.content_type,
             file_size=upload_request.file_size
         )
         
-        logger.info("Presigned URL generated successfully", 
-                   user_id=str(current_user.id),
-                   upload_id=result["upload_id"])
+        logger.info("Upload instructions generated successfully", 
+                   user_id=current_user.id,
+                   file_path=instructions["file_path"])
         
-        return PresignResponse(
-            presigned_url=result["presigned_url"],
-            upload_id=result["upload_id"],
-            expires_in=result["expires_in"],
-            max_file_size=MAX_FILE_SIZE,
-            allowed_mime_types=list(ALLOWED_MIME_TYPES)
-        )
+        return {
+            **instructions,
+            "max_file_size": MAX_FILE_SIZE,
+            "allowed_mime_types": list(ALLOWED_MIME_TYPES)
+        }
         
     except Exception as e:
-        logger.error("Presigned URL generation failed", 
-                    user_id=str(current_user.id),
+        logger.error("Upload instructions generation failed", 
+                    user_id=current_user.id,
                     error=str(e))
         raise HTTPException(
             status_code=500,
             detail={
-                "code": "UPLOAD_URL_GENERATION_FAILED",
-                "message": "Failed to generate upload URL. Please try again."
+                "code": "UPLOAD_INSTRUCTIONS_FAILED",
+                "message": "Failed to generate upload instructions. Please try again."
             }
+        )
+
+
+@router.get("/download/{file_path:path}")
+async def get_download_url(
+    file_path: str,
+    expires_in: int = 3600,
+    current_user: SupabaseUser = Depends(get_current_active_user)
+) -> Dict[str, Any]:
+    """Get signed download URL for uploaded file."""
+    
+    # Verify user can access this file (file path should start with user_id)
+    if not file_path.startswith(current_user.id):
+        raise HTTPException(
+            status_code=403,
+            detail="Access denied to this file"
+        )
+    
+    try:
+        download_url = UploadService.get_download_url(file_path, expires_in)
+        
+        if not download_url:
+            raise HTTPException(
+                status_code=404,
+                detail="File not found"
+            )
+        
+        return {
+            "download_url": download_url,
+            "expires_in": expires_in
+        }
+        
+    except Exception as e:
+        logger.error("Download URL generation failed", 
+                    user_id=current_user.id,
+                    file_path=file_path,
+                    error=str(e))
+        raise HTTPException(
+            status_code=500,
+            detail="Failed to generate download URL"
         )

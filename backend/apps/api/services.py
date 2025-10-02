@@ -1,230 +1,78 @@
 """
-Authentication service for user management and JWT handling.
-Enhanced with timeout protection, structured logging, and resilient operations.
+Supabase-based services for user management, jobs, and billing.
+Replaces SQLModel-based services with PostgREST API calls.
+
+These services now support per-request user JWT authentication for proper RLS enforcement.
 """
 from datetime import datetime, timedelta
-from typing import Optional
-from uuid import UUID
-from sqlmodel import Session, select
+from typing import Optional, List, Dict, Any
+from uuid import UUID, uuid4
 import structlog
 import time
-from apps.core.security import SecurityUtils
+import os
+from apps.core.security import SupabaseUser
 from apps.core.exceptions import AuthenticationError, NotFoundError, ValidationError
 from apps.core.settings import settings
-from apps.db.models.user import User, UserCreate, UserLogin, UserResponse, UserRead
-from apps.db.models.credit import CreditTransaction, CreditTransactionCreate
-from apps.core.config import TransactionType
-import boto3
-from botocore.exceptions import ClientError
-from uuid import uuid4
-import os
+from apps.core.supabase_client import supabase_client
+from apps.core.supa_request import user_client, service_client
 
 # Initialize structured logger
 logger = structlog.get_logger()
 
 
-class AuthService:
-    """Authentication service for user management."""
+class ProfileService:
+    """Profile service for user management using Supabase."""
     
     @staticmethod
-    def create_user(session: Session, user_data: UserCreate) -> User:
-        """Create a new user with hashed password."""
-        # Check if user already exists
-        statement = select(User).where(User.email == user_data.email)
-        existing_user = session.exec(statement).first()
-        if existing_user:
-            raise ValidationError("Email already registered")
-        
-        # Create user with hashed password
-        hashed_password = SecurityUtils.get_password_hash(user_data.password)
-        user = User(
-            email=user_data.email,
-            hashed_password=hashed_password,
-            credits=settings.default_credits,
-            subscription_status=user_data.subscription_status,
-            subscription_expires_at=user_data.subscription_expires_at
-        )
-        
-        session.add(user)
-        session.commit()
-        session.refresh(user)
-        
-        # Create initial credit transaction
-        credit_transaction = CreditTransaction(
-            user_id=user.id,
-            amount=settings.default_credits,
-            transaction_type=TransactionType.BONUS,
-            description="Welcome bonus credits"
-        )
-        session.add(credit_transaction)
-        session.commit()
-        
-        return user
-    
-    @staticmethod
-    def authenticate_user(session: Session, email: str, password: str) -> Optional[User]:
-        """Authenticate user with email and password."""
-        statement = select(User).where(User.email == email)
-        user = session.exec(statement).first()
-        
-        if not user:
-            return None
-        
-        if not SecurityUtils.verify_password(password, user.hashed_password):
-            return None
-        
-        return user
-    
-    @staticmethod
-    def login_user(session: Session, login_data: UserLogin) -> UserResponse:
-        """Login user and return JWT token with enhanced monitoring and timeout protection."""
-        start_time = time.time()
-        
-        logger.info(
-            "Login process started",
-            email=login_data.email
-        )
-        
+    def get_or_create_profile(user: SupabaseUser) -> Optional[Dict[str, Any]]:
+        """Get or create user profile from Supabase."""
         try:
-            # Authenticate user with timeout monitoring
-            auth_start = time.time()
-            user = AuthService.authenticate_user(
-                session, 
-                login_data.email, 
-                login_data.password
-            )
-            auth_duration = int((time.time() - auth_start) * 1000)
+            # Try to get existing profile
+            profile = supabase_client.get_profile(user.id)
             
-            if not user:
-                logger.warning(
-                    "Authentication failed - invalid credentials",
-                    email=login_data.email,
-                    auth_duration_ms=auth_duration
-                )
-                raise AuthenticationError("Invalid email or password")
-            
-            logger.info(
-                "User authenticated successfully",
-                user_id=str(user.id),
-                email=login_data.email,
-                auth_duration_ms=auth_duration
-            )
-            
-            # Create access token with timeout monitoring
-            token_start = time.time()
-            access_token = SecurityUtils.create_access_token(
-                data={"sub": str(user.id)}
-            )
-            token_duration = int((time.time() - token_start) * 1000)
-            
-            # Update last login time with timeout monitoring
-            update_start = time.time()
-            user.updated_at = datetime.utcnow()
-            session.add(user)
-            session.commit()
-            session.refresh(user)
-            update_duration = int((time.time() - update_start) * 1000)
-            
-            total_duration = int((time.time() - start_time) * 1000)
-            
-            logger.info(
-                "Login completed successfully",
-                user_id=str(user.id),
-                email=login_data.email,
-                auth_duration_ms=auth_duration,
-                token_duration_ms=token_duration,
-                update_duration_ms=update_duration,
-                total_duration_ms=total_duration
-            )
-            
-            return UserResponse(
-                access_token=access_token,
-                user=UserRead(
-                    id=user.id,
-                    email=user.email,
-                    credits=user.credits,
-                    subscription_status=user.subscription_status,
-                    subscription_expires_at=user.subscription_expires_at,
-                    created_at=user.created_at,
-                    updated_at=user.updated_at
-                )
-            )
-            
-        except AuthenticationError:
-            # Re-raise authentication errors as-is
-            raise
+            if profile is None:
+                # Create new profile using RPC function
+                response = supabase_client.client.rpc(
+                    "bootstrap_user_profile",
+                    {
+                        "user_id": user.id,
+                        "user_email": user.email,
+                        "initial_credits": settings.default_credits
+                    }
+                ).execute()
+                
+                if response.data:
+                    # Get the created profile
+                    profile = supabase_client.get_profile(user.id)
+                
+            return profile
             
         except Exception as e:
-            total_duration = int((time.time() - start_time) * 1000)
-            
-            logger.error(
-                "Login failed with unexpected error",
-                email=login_data.email,
-                error=str(e),
-                error_type=type(e).__name__,
-                total_duration_ms=total_duration
-            )
-            
-            # Convert database/system errors to authentication errors
-            # This prevents internal error details from leaking to clients
-            raise AuthenticationError("Authentication service temporarily unavailable")
+            logger.error(f"Failed to get or create profile for user {user.id}: {e}")
+            return None
     
     @staticmethod
-    def get_user_by_id(session: Session, user_id: UUID) -> Optional[User]:
-        """Get user by ID."""
-        return session.get(User, user_id)
+    def update_profile(user_id: str, updates: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """Update user profile."""
+        return supabase_client.update_profile(user_id, updates)
     
     @staticmethod
-    def get_user_by_email(session: Session, email: str) -> Optional[User]:
-        """Get user by email."""
-        statement = select(User).where(User.email == email)
-        return session.exec(statement).first()
-    
-    @staticmethod
-    def update_user_credits(session: Session, user_id: UUID, credits_change: int, transaction_type: str, reference_id: Optional[str] = None) -> User:
-        """Update user credits and create transaction record."""
-        user = AuthService.get_user_by_id(session, user_id)
-        if not user:
-            raise NotFoundError("User", str(user_id))
-        
-        # Update user credits
-        user.credits += credits_change
-        user.updated_at = datetime.utcnow()
-        session.add(user)
-        
-        # Create credit transaction
-        credit_transaction = CreditTransaction(
-            user_id=user_id,
-            amount=credits_change,
-            transaction_type=transaction_type,
-            reference_id=reference_id
-        )
-        session.add(credit_transaction)
-        
-        session.commit()
-        session.refresh(user)
-        return user
+    def get_profile(user_id: str) -> Optional[Dict[str, Any]]:
+        """Get user profile by ID."""
+        return supabase_client.get_profile(user_id)
 
 
 class UploadService:
-    """S3 upload service for handling file uploads."""
+    """Supabase Storage service for handling file uploads."""
     
-    def __init__(self):
-        self.s3_client = boto3.client(
-            's3',
-            aws_access_key_id=settings.s3_key,
-            aws_secret_access_key=settings.s3_secret,
-            region_name=settings.s3_region
-        )
-    
-    def generate_presigned_url(
-        self, 
+    @staticmethod
+    def get_upload_instructions(
+        user_id: str,
         filename: str, 
         content_type: str, 
-        file_size: int,
-        expires_in: int = 3600
-    ) -> dict:
-        """Generate presigned URL for S3 upload."""
+        file_size: int
+    ) -> Dict[str, Any]:
+        """Get upload instructions for Supabase Storage."""
         # Validate file size
         max_size = settings.max_file_size_mb * 1024 * 1024  # Convert to bytes
         if file_size > max_size:
@@ -234,222 +82,214 @@ class UploadService:
         if not content_type.startswith('image/'):
             raise ValidationError("Only image files are allowed")
         
-        # Generate unique file key
+        # Generate unique file path
         file_extension = os.path.splitext(filename)[1]
         unique_filename = f"{uuid4()}{file_extension}"
-        file_key = f"uploads/{unique_filename}"
+        file_path = f"{user_id}/{unique_filename}"
         
-        try:
-            # Generate presigned URL
-            presigned_url = self.s3_client.generate_presigned_url(
-                'put_object',
-                Params={
-                    'Bucket': settings.s3_bucket,
-                    'Key': file_key,
-                    'ContentType': content_type
-                },
-                ExpiresIn=expires_in
-            )
-            
-            return {
-                "presigned_url": presigned_url,
-                "upload_id": str(uuid4()),
-                "file_key": file_key,
-                "expires_in": expires_in
-            }
-            
-        except ClientError as e:
-            raise ValidationError(f"Failed to generate upload URL: {str(e)}")
+        return {
+            "bucket": "uploads",
+            "file_path": file_path,
+            "upload_url": f"{settings.supabase_url}/storage/v1/object/uploads/{file_path}",
+            "headers": {
+                "Authorization": f"Bearer {settings.supabase_anon_key}",
+                "Content-Type": content_type
+            },
+            "method": "POST"
+        }
     
-    def get_file_url(self, file_key: str) -> str:
-        """Get public URL for uploaded file."""
-        return f"https://{settings.s3_bucket}.s3.{settings.s3_region}.amazonaws.com/{file_key}"
+    @staticmethod
+    def get_download_url(file_path: str, expires_in: int = 3600) -> Optional[str]:
+        """Get signed download URL for uploaded file."""
+        return supabase_client.get_download_url("uploads", file_path, expires_in)
+    
+    @staticmethod
+    def get_public_url(bucket: str, file_path: str) -> str:
+        """Get public URL for file in Supabase Storage."""
+        return f"{settings.supabase_url}/storage/v1/object/public/{bucket}/{file_path}"
 
 
 class JobService:
-    """Job processing service for managing AI tasks."""
+    """Job processing service using Supabase with per-request authentication."""
+    
+    # Define credit costs for different job types
+    CREDIT_COSTS = {
+        "face_swap": 2,
+        "face_restore": 1,
+        "upscale": 1
+    }
     
     @staticmethod
-    def create_job(session: Session, user: User, job_data: 'JobCreate') -> 'Job':
-        """Create a new AI processing job."""
-        from apps.db.models.job import Job
-        from apps.core.config import CREDIT_COSTS, JOB_TIMEOUTS
-        
-        # Check if user has enough credits
-        credits_required = CREDIT_COSTS.get(job_data.job_type, 1)
-        if user.credits < credits_required:
-            from apps.core.exceptions import InsufficientCreditsError
-            raise InsufficientCreditsError(credits_required, user.credits)
-        
-        # Create job record
-        job = Job(
-            user_id=user.id,
-            job_type=job_data.job_type,
-            input_image_url=job_data.input_image_url,
-            target_image_url=job_data.target_image_url,
-            parameters=job_data.parameters,
-            credits_cost=credits_required
-        )
-        
-        session.add(job)
-        session.commit()
-        session.refresh(job)
-        
-        # Deduct credits from user
-        AuthService.update_user_credits(
-            session, 
-            user.id, 
-            -credits_required, 
-            TransactionType.USAGE,
-            str(job.id)
-        )
-        
-        # Queue background job (placeholder - would integrate with Celery)
-        # queue_ai_processing_task.delay(str(job.id))
-        
-        return job
-    
-    @staticmethod
-    def get_job(session: Session, job_id: UUID, user_id: UUID) -> Optional['Job']:
-        """Get job by ID and user ID."""
-        from apps.db.models.job import Job
-        statement = select(Job).where(Job.id == job_id, Job.user_id == user_id)
-        return session.exec(statement).first()
-    
-    @staticmethod
-    def update_job_status(session: Session, job_id: UUID, status: str, progress: float = None, result_url: str = None, error_message: str = None) -> Optional['Job']:
-        """Update job status and progress."""
-        from apps.db.models.job import Job
-        job = session.get(Job, job_id)
-        if not job:
-            return None
-        
-        job.status = status
-        if progress is not None:
-            job.progress = progress
-        if result_url:
-            job.result_image_url = result_url
-        if error_message:
-            job.error_message = error_message
-        if status in ['completed', 'failed']:
-            job.completed_at = datetime.utcnow()
-        
-        session.add(job)
-        session.commit()
-        session.refresh(job)
-        return job
-    
-    @staticmethod
-    def get_user_jobs(session: Session, user_id: UUID, skip: int = 0, limit: int = 10) -> list:
-        """Get user's jobs with pagination."""
-        from apps.db.models.job import Job
-        statement = select(Job).where(Job.user_id == user_id).offset(skip).limit(limit).order_by(Job.created_at.desc())
-        return session.exec(statement).all()
-
-
-class BillingService:
-    """Billing service for receipt validation and credit management."""
-    
-    @staticmethod
-    def validate_receipt(session: Session, user: User, receipt_data: 'ReceiptValidation') -> 'ReceiptValidationResponse':
-        """Validate Superwall receipt and add credits."""
-        from apps.db.models.subscription import Subscription, ReceiptValidationResponse
-        from apps.core.config import SubscriptionStatus
-        import json
-        import requests
-        
+    def create_job(user: SupabaseUser, job_data: Dict[str, Any], user_jwt: str) -> Optional[Dict[str, Any]]:
+        """Create a new AI processing job with user-scoped authentication."""
         try:
-            # Check if transaction already processed
-            existing_subscription = session.query(Subscription).filter(
-                Subscription.transaction_id == receipt_data.transaction_id
-            ).first()
+            # Get credit cost for job type
+            credits_required = JobService.CREDIT_COSTS.get(job_data.get("job_type"), 1)
             
-            if existing_subscription:
-                return ReceiptValidationResponse(
-                    valid=False,
-                    credits_added=0,
-                    subscription_status=user.subscription_status,
-                    error_message="Transaction already processed"
-                )
+            # Validate and debit credits atomically using service client
+            # (RPC functions are SECURITY DEFINER and validate auth.uid() internally)
+            service_cli = service_client()
+            has_sufficient_credits = service_cli.rpc("validate_and_debit_credits", {
+                "target_user_id": user.id,
+                "credit_amount": credits_required,
+                "job_ref_id": None  # Will be updated after job creation
+            }).execute()
             
-            # Validate receipt with Superwall/Apple/Google (simplified)
-            # In production, this would make actual API calls to validate receipts
-            is_valid = BillingService._validate_receipt_with_provider(receipt_data)
+            if not has_sufficient_credits.data:
+                from apps.core.exceptions import InsufficientCreditsError
+                raise InsufficientCreditsError(credits_required, 0)
             
-            if not is_valid:
-                return ReceiptValidationResponse(
-                    valid=False,
-                    credits_added=0,
-                    subscription_status=user.subscription_status,
-                    error_message="Invalid receipt"
-                )
+            # Prepare job data
+            job_payload = {
+                "user_id": user.id,
+                "job_type": job_data.get("job_type"),
+                "input_image_url": job_data.get("input_image_url"),
+                "target_image_url": job_data.get("target_image_url"),
+                "parameters": job_data.get("parameters", {}),
+                "status": "pending",
+                "progress": 0.0
+            }
             
-            # Determine credits based on product ID
-            credits_to_add = BillingService._get_credits_for_product(receipt_data.product_id)
-            subscription_expires_at = datetime.utcnow() + timedelta(days=30)  # Default 30 days
+            # Create job record using user client (RLS enforced)
+            user_cli = user_client(user_jwt)
+            response = user_cli.table("jobs").insert(job_payload).execute()
             
-            # Create subscription record
-            subscription = Subscription(
-                user_id=user.id,
-                product_id=receipt_data.product_id,
-                transaction_id=receipt_data.transaction_id,
-                receipt_data=receipt_data.receipt_data,
-                status=SubscriptionStatus.ACTIVE,
-                credits_included=credits_to_add,
-                expires_at=subscription_expires_at
-            )
+            if not response.data:
+                # Refund credits if job creation failed
+                service_cli.rpc("increment_credits", {
+                    "target_user_id": user.id,
+                    "credit_amount": credits_required
+                }).execute()
+                raise ValidationError("Failed to create job")
             
-            session.add(subscription)
-            
-            # Add credits to user
-            AuthService.update_user_credits(
-                session,
-                user.id,
-                credits_to_add,
-                TransactionType.PURCHASE,
-                receipt_data.transaction_id
-            )
-            
-            # Update user subscription status
-            user.subscription_status = SubscriptionStatus.ACTIVE
-            user.subscription_expires_at = subscription_expires_at
-            user.updated_at = datetime.utcnow()
-            session.add(user)
-            
-            session.commit()
-            
-            return ReceiptValidationResponse(
-                valid=True,
-                credits_added=credits_to_add,
-                subscription_status=SubscriptionStatus.ACTIVE,
-                expires_at=subscription_expires_at
-            )
+            job = response.data[0]
+            logger.info(f"Job created successfully: {job['id']} for user {user.id}")
+            return job
             
         except Exception as e:
-            session.rollback()
-            return ReceiptValidationResponse(
-                valid=False,
-                credits_added=0,
-                subscription_status=user.subscription_status,
-                error_message=f"Validation error: {str(e)}"
-            )
+            logger.error(f"Failed to create job for user {user.id}: {e}")
+            raise
     
     @staticmethod
-    def _validate_receipt_with_provider(receipt_data: 'ReceiptValidation') -> bool:
-        """Validate receipt with payment provider (placeholder implementation)."""
-        # In production, this would make actual API calls to Apple/Google/Superwall
-        # For now, return True for development
-        return True
+    def get_job(job_id: str, user_jwt: str) -> Optional[Dict[str, Any]]:
+        """Get job by ID using user authentication (RLS enforced)."""
+        try:
+            user_cli = user_client(user_jwt)
+            response = user_cli.table("jobs").select("*").eq("id", job_id).single().execute()
+            return response.data if response.data else None
+        except Exception as e:
+            logger.error(f"Failed to get job {job_id}: {e}")
+            return None
     
     @staticmethod
-    def _get_credits_for_product(product_id: str) -> int:
-        """Get credit amount based on product ID."""
-        # Define product mappings
-        product_credits = {
-            "credits_10": 10,
-            "credits_50": 50,
-            "credits_100": 100,
-            "subscription_monthly": 100,
-            "subscription_yearly": 1200
-        }
-        return product_credits.get(product_id, 10)  # Default to 10 credits
+    def get_user_jobs(user_jwt: str, limit: int = 50, offset: int = 0) -> List[Dict[str, Any]]:
+        """Get user's jobs with pagination using user authentication (RLS enforced)."""
+        try:
+            user_cli = user_client(user_jwt)
+            response = (user_cli.table("jobs")
+                       .select("*")
+                       .order("created_at", desc=True)
+                       .range(offset, offset + limit - 1)
+                       .execute())
+            return response.data or []
+        except Exception as e:
+            logger.error(f"Failed to get user jobs: {e}")
+            return []
+    
+    @staticmethod
+    def update_job_status(
+        job_id: str, 
+        status: str, 
+        user_jwt: str = None,
+        progress: float = None, 
+        result_url: str = None, 
+        error_message: str = None
+    ) -> Optional[Dict[str, Any]]:
+        """Update job status and progress.
+        
+        If user_jwt is provided, uses user client (for user updates).
+        Otherwise uses service client (for system updates).
+        """
+        updates = {"status": status}
+        
+        if progress is not None:
+            updates["progress"] = progress
+        if result_url:
+            updates["result_image_url"] = result_url
+        if error_message:
+            updates["error_message"] = error_message
+        if status in ["completed", "failed"]:
+            updates["completed_at"] = datetime.utcnow().isoformat()
+        if status == "processing" and not updates.get("started_at"):
+            updates["started_at"] = datetime.utcnow().isoformat()
+        
+        try:
+            if user_jwt:
+                # User-initiated update (RLS enforced)
+                client = user_client(user_jwt)
+            else:
+                # System update (service role)
+                client = service_client()
+            
+            response = client.table("jobs").update(updates).eq("id", job_id).execute()
+            return response.data[0] if response.data else None
+        except Exception as e:
+            logger.error(f"Failed to update job {job_id}: {e}")
+            return None
+
+
+class CreditService:
+    """Credit management service using Supabase with proper authentication."""
+    
+    @staticmethod
+    def get_credit_transactions(user_jwt: str, limit: int = 50) -> List[Dict[str, Any]]:
+        """Get credit transactions for a user using user authentication (RLS enforced)."""
+        try:
+            user_cli = user_client(user_jwt)
+            response = (user_cli.table("credit_transactions")
+                       .select("*")
+                       .order("created_at", desc=True)
+                       .limit(limit)
+                       .execute())
+            return response.data or []
+        except Exception as e:
+            logger.error(f"Failed to get credit transactions: {e}")
+            return []
+    
+    @staticmethod
+    def add_credits(user_id: str, amount: int, transaction_type: str = "credit", metadata: Dict[str, Any] = None) -> bool:
+        """Add credits to user account using service role (admin operation)."""
+        try:
+            service_cli = service_client()
+            response = service_cli.rpc("increment_credits", {
+                "target_user_id": user_id,
+                "credit_amount": amount
+            }).execute()
+            
+            success = response.data if response.data is not None else False
+            
+            if success and metadata:
+                # Create additional transaction record with metadata
+                transaction_data = {
+                    "user_id": user_id,
+                    "amount": amount,
+                    "transaction_type": transaction_type,
+                    "metadata": metadata or {}
+                }
+                service_cli.table("credit_transactions").insert(transaction_data).execute()
+            
+            return success
+        except Exception as e:
+            logger.error(f"Failed to add credits for user {user_id}: {e}")
+            return False
+    
+    @staticmethod
+    def get_user_credits(user_jwt: str) -> int:
+        """Get current user credit balance using user authentication (RLS enforced)."""
+        try:
+            user_cli = user_client(user_jwt)
+            response = user_cli.table("profiles").select("credits").single().execute()
+            return response.data.get("credits", 0) if response.data else 0
+        except Exception as e:
+            logger.error(f"Failed to get user credits: {e}")
+            return 0

@@ -9,11 +9,17 @@ from pydantic import field_validator
 class Settings(BaseSettings):
     """Application settings loaded from environment variables."""
     
+    # Supabase Configuration
+    supabase_url: str
+    supabase_anon_key: str
+    supabase_service_role_key: str
+    supabase_jwt_secret: str
+    
     # Database
     database_url: str
     
-    # JWT Configuration
-    jwt_secret: str
+    # JWT Configuration (Supabase)
+    jwt_secret: str  # This will be the Supabase JWT secret
     jwt_expiration_hours: int = 24
     jwt_algorithm: str = "HS256"
     
@@ -112,6 +118,10 @@ class Settings(BaseSettings):
     # Provider Configuration
     enforce_real_providers: bool = False  # Enforce real GPU providers only
     disable_mock_providers: bool = False  # Disable mock providers
+    
+    # Replicate API Configuration
+    replicate_api_token: str = ""
+    replicate_upscale_model: str = "nightmareai/real-esrgan"
     
     # Secret Rotation
     jwt_secret_version: str = "v1"  # JWT secret version for rotation
