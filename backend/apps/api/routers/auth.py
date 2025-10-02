@@ -1,280 +1,131 @@
 """
-Authentication router for user login and profile endpoints.
-Enhanced with timeout handling, rate limiting, and resilient response patterns.
+Authentication router for Supabase-based user profile management.
+Authentication is handled by Supabase Auth directly from the client.
 """
-from fastapi import APIRouter, Depends, HTTPException, status, Request, BackgroundTasks
+from fastapi import APIRouter, Depends, HTTPException, status, Request
 from fastapi.responses import JSONResponse
-from sqlmodel import Session
+from typing import Optional, Dict, Any
 import time
-import asyncio
-from typing import Optional
 import structlog
-from apps.db.session import get_session
-from apps.db.models.user import UserLogin, UserResponse, UserRead, UserCreate
-from apps.api.services import AuthService
-from apps.core.security import get_current_active_user
-from apps.db.models.user import User
-from apps.core.exceptions import AuthenticationError, ValidationError
+from apps.api.services import ProfileService, CreditService
+from apps.core.security import get_current_active_user, get_optional_user, SupabaseUser
+from apps.core.exceptions import ValidationError
 
 # Initialize structured logger
 logger = structlog.get_logger()
 
-router = APIRouter(prefix="/auth", tags=["authentication"])
+router = APIRouter(tags=["authentication"])
 
 
-@router.post("/register", response_model=UserResponse)
-async def register_user(
-    user_data: UserCreate,
+@router.post("/bootstrap-profile")
+async def bootstrap_profile(
     request: Request,
-    background_tasks: BackgroundTasks,
-    session: Session = Depends(get_session)
-):
-    """Register a new user account with enhanced error handling and monitoring."""
+    current_user: SupabaseUser = Depends(get_current_active_user)
+) -> Dict[str, Any]:
+    """Bootstrap user profile after Supabase authentication.
+    
+    This endpoint should be called after a user successfully authenticates
+    with Supabase to ensure their profile exists in our database.
+    """
     start_time = time.time()
     client_ip = request.client.host if request.client else "unknown"
     
-    # Log registration attempt
     logger.info(
-        "Registration attempt started",
-        email=user_data.email,
-        client_ip=client_ip,
-        user_agent=request.headers.get("user-agent", "unknown")
+        "Profile bootstrap started",
+        user_id=current_user.id,
+        email=current_user.email,
+        client_ip=client_ip
     )
     
     try:
-        # Add timeout protection for database operations
-        user = await asyncio.wait_for(
-            asyncio.to_thread(AuthService.create_user, session, user_data),
-            timeout=10.0  # 10 second timeout for user creation
-        )
+        # Get or create profile
+        profile = ProfileService.get_or_create_profile(current_user)
         
-        # Login the newly created user with timeout protection
-        login_data = UserLogin(email=user.email, password=user_data.password)
-        response = await asyncio.wait_for(
-            asyncio.to_thread(AuthService.login_user, session, login_data),
-            timeout=5.0  # 5 second timeout for login
-        )
+        if not profile:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Failed to create user profile"
+            )
         
-        # Log successful registration
         duration_ms = int((time.time() - start_time) * 1000)
+        
         logger.info(
-            "Registration completed successfully",
-            user_id=str(user.id),
-            email=user_data.email,
+            "Profile bootstrap completed",
+            user_id=current_user.id,
+            email=current_user.email,
             client_ip=client_ip,
             duration_ms=duration_ms
         )
         
-        return response
-        
-    except asyncio.TimeoutError:
-        duration_ms = int((time.time() - start_time) * 1000)
-        logger.error(
-            "Registration timeout",
-            email=user_data.email,
-            client_ip=client_ip,
-            duration_ms=duration_ms,
-            timeout_type="database_operation"
-        )
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Service temporarily unavailable. Please try again in a moment."
-        )
-        
-    except ValidationError as e:
-        duration_ms = int((time.time() - start_time) * 1000)
-        logger.warning(
-            "Registration validation failed",
-            email=user_data.email,
-            client_ip=client_ip,
-            error=str(e),
-            duration_ms=duration_ms
-        )
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail=str(e)
-        )
+        return {
+            "profile": profile,
+            "message": "Profile ready"
+        }
         
     except Exception as e:
         duration_ms = int((time.time() - start_time) * 1000)
+        
         logger.error(
-            "Registration failed with unexpected error",
-            email=user_data.email,
+            "Profile bootstrap failed",
+            user_id=current_user.id,
+            email=current_user.email,
             client_ip=client_ip,
             error=str(e),
             duration_ms=duration_ms
         )
+        
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="An unexpected error occurred. Please try again."
+            detail="Failed to bootstrap user profile"
         )
 
 
-@router.post("/login", response_model=UserResponse)
-async def login_user(
-    login_data: UserLogin,
-    request: Request,
-    background_tasks: BackgroundTasks,
-    session: Session = Depends(get_session)
-):
-    """Authenticate user and return access token with enhanced reliability."""
-    start_time = time.time()
-    client_ip = request.client.host if request.client else "unknown"
-    
-    # Log login attempt
-    logger.info(
-        "Login attempt started",
-        email=login_data.email,
-        client_ip=client_ip,
-        user_agent=request.headers.get("user-agent", "unknown")
-    )
-    
-    try:
-        # Add timeout protection for authentication
-        response = await asyncio.wait_for(
-            asyncio.to_thread(AuthService.login_user, session, login_data),
-            timeout=8.0  # 8 second timeout for login operations
-        )
-        
-        # Log successful login
-        duration_ms = int((time.time() - start_time) * 1000)
-        logger.info(
-            "Login completed successfully",
-            user_id=str(response.user.id),
-            email=login_data.email,
-            client_ip=client_ip,
-            duration_ms=duration_ms
-        )
-        
-        return response
-        
-    except asyncio.TimeoutError:
-        duration_ms = int((time.time() - start_time) * 1000)
-        logger.error(
-            "Login timeout",
-            email=login_data.email,
-            client_ip=client_ip,
-            duration_ms=duration_ms,
-            timeout_type="authentication"
-        )
-        
-        # Return 503 for timeout to trigger client retry logic
-        return JSONResponse(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            content={
-                "error": {
-                    "code": "authentication_timeout",
-                    "message": "Authentication is taking longer than expected. Please try again.",
-                    "retry_after": 5
-                }
-            },
-            headers={"Retry-After": "5"}
-        )
-        
-    except AuthenticationError as e:
-        duration_ms = int((time.time() - start_time) * 1000)
-        logger.warning(
-            "Login authentication failed",
-            email=login_data.email,
-            client_ip=client_ip,
-            error=str(e),
-            duration_ms=duration_ms
-        )
-        
-        # Return 401 for invalid credentials
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid email or password"
-        )
-        
-    except Exception as e:
-        duration_ms = int((time.time() - start_time) * 1000)
-        logger.error(
-            "Login failed with unexpected error",
-            email=login_data.email,
-            client_ip=client_ip,
-            error=str(e),
-            error_type=type(e).__name__,
-            duration_ms=duration_ms
-        )
-        
-        # Return 503 for unexpected errors to trigger retry
-        return JSONResponse(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            content={
-                "error": {
-                    "code": "service_unavailable",
-                    "message": "Service temporarily unavailable. Please try again in a moment.",
-                    "retry_after": 10
-                }
-            },
-            headers={"Retry-After": "10"}
-        )
-
-
-@router.get("/me", response_model=UserRead)
+@router.get("/profile")
 async def get_current_user_profile(
     request: Request,
-    current_user: User = Depends(get_current_active_user)
-):
-    """Get current user profile information with enhanced monitoring."""
+    current_user: SupabaseUser = Depends(get_current_active_user)
+) -> Dict[str, Any]:
+    """Get current user profile information."""
     start_time = time.time()
     client_ip = request.client.host if request.client else "unknown"
     
     try:
-        # Add timeout protection for profile retrieval
-        profile_data = await asyncio.wait_for(
-            asyncio.to_thread(
-                lambda: UserRead(
-                    id=current_user.id,
-                    email=current_user.email,
-                    credits=current_user.credits,
-                    subscription_status=current_user.subscription_status,
-                    subscription_expires_at=current_user.subscription_expires_at,
-                    created_at=current_user.created_at,
-                    updated_at=current_user.updated_at
-                )
-            ),
-            timeout=3.0  # 3 second timeout for profile data
-        )
+        # Get profile from Supabase
+        profile = ProfileService.get_profile(current_user.id)
         
-        # Log successful profile retrieval
+        if not profile:
+            # Try to bootstrap profile if it doesn't exist
+            profile = ProfileService.get_or_create_profile(current_user)
+        
+        if not profile:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Profile not found"
+            )
+        
+        # Get recent credit transactions
+        credit_transactions = CreditService.get_credit_transactions(current_user.id, limit=10)
+        
         duration_ms = int((time.time() - start_time) * 1000)
+        
         logger.info(
             "Profile retrieved successfully",
-            user_id=str(current_user.id),
+            user_id=current_user.id,
             client_ip=client_ip,
             duration_ms=duration_ms
         )
         
-        return profile_data
-        
-    except asyncio.TimeoutError:
-        duration_ms = int((time.time() - start_time) * 1000)
-        logger.error(
-            "Profile retrieval timeout",
-            user_id=str(current_user.id),
-            client_ip=client_ip,
-            duration_ms=duration_ms
-        )
-        
-        return JSONResponse(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            content={
-                "error": {
-                    "code": "profile_timeout",
-                    "message": "Profile data is taking longer to load. Please try again.",
-                    "retry_after": 3
-                }
-            },
-            headers={"Retry-After": "3"}
-        )
+        return {
+            "profile": profile,
+            "recent_transactions": credit_transactions
+        }
         
     except Exception as e:
         duration_ms = int((time.time() - start_time) * 1000)
+        
         logger.error(
             "Profile retrieval failed",
-            user_id=str(current_user.id),
+            user_id=current_user.id,
             client_ip=client_ip,
             error=str(e),
             duration_ms=duration_ms
@@ -287,34 +138,40 @@ async def get_current_user_profile(
 
 
 @router.get("/health")
-async def auth_health_check(
-    request: Request
-):
-    """Health check endpoint for authentication service monitoring."""
+async def auth_health_check(request: Request) -> Dict[str, Any]:
+    """Health check endpoint for authentication service."""
     start_time = time.time()
     
     try:
-        # Quick health checks
+        # Check Supabase connection
+        from apps.core.supabase_client import supabase_client
+        is_healthy = supabase_client.health_check()
+        
         health_status = {
-            "status": "healthy",
+            "status": "healthy" if is_healthy else "unhealthy",
             "timestamp": int(time.time()),
-            "service": "authentication",
+            "service": "supabase_auth",
             "version": "2.0",
             "checks": {
-                "database": "healthy",
-                "auth_service": "healthy"
+                "supabase_connection": "healthy" if is_healthy else "unhealthy",
+                "jwt_validation": "healthy"
             }
         }
         
         duration_ms = int((time.time() - start_time) * 1000)
         
-        # Log health check
         logger.info(
             "Auth health check completed",
-            status="healthy",
+            status="healthy" if is_healthy else "unhealthy",
             duration_ms=duration_ms,
             client_ip=request.client.host if request.client else "unknown"
         )
+        
+        if not is_healthy:
+            return JSONResponse(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                content=health_status
+            )
         
         return health_status
         
@@ -332,7 +189,7 @@ async def auth_health_check(
             content={
                 "status": "unhealthy",
                 "timestamp": int(time.time()),
-                "service": "authentication",
+                "service": "supabase_auth",
                 "error": "Health check failed"
             }
         )

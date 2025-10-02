@@ -19,7 +19,6 @@ from apps.core.exceptions import (
     general_exception_handler,
     OneShotException
 )
-from apps.db.session import create_db_and_tables
 from apps.core.monitoring import (
     init_sentry,
     metrics,
@@ -223,11 +222,14 @@ def setup_exception_handlers(app: FastAPI):
 def setup_routers(app: FastAPI):
     """Setup API routers with rate limiting."""
     
-    # Include only the auth router for now to avoid circular imports
-    from apps.api.routers import auth
+    # Import all routers
+    from apps.api.routers import auth, jobs, uploads, credits
     
     # Include routers with API prefix
-    app.include_router(auth.router, prefix="/api/v1")
+    app.include_router(auth.router, prefix="/api")
+    app.include_router(jobs.router, prefix="/api")
+    app.include_router(uploads.router, prefix="/api")
+    app.include_router(credits.router, prefix="/api")
     
     # Enhanced health check endpoints (without rate limiting if Redis unavailable)
     if RATE_LIMITING_ENABLED:
@@ -307,26 +309,17 @@ def setup_event_handlers(app: FastAPI):
         """Application startup event with logging."""
         logger.info("OneShot API v2.0 starting up", 
                    environment=settings.environment,
-                   database_url=settings.database_url[:20] + "...")
+                   supabase_url=settings.supabase_url[:30] + "...")
         
-        # Create database tables
-        create_db_and_tables()
-        
-        # Apply pending migrations
+        # Test Supabase connection
         try:
-            import subprocess
-            result = subprocess.run(
-                ["python", "-c", "from alembic.config import Config; from alembic import command; cfg = Config('alembic.ini'); command.upgrade(cfg, 'head')"],
-                capture_output=True,
-                text=True,
-                cwd="."
-            )
-            if result.returncode == 0:
-                logger.info("Database migrations applied successfully")
+            from apps.core.supabase_client import supabase_client
+            if supabase_client.health_check():
+                logger.info("Supabase connection healthy")
             else:
-                logger.warning("Migration check failed", error=result.stderr)
+                logger.warning("Supabase connection check failed")
         except Exception as e:
-            logger.warning("Could not run migrations", error=str(e))
+            logger.error("Supabase connection error", error=str(e))
         
         logger.info("OneShot API v2.0 started successfully")
     

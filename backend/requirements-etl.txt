@@ -1,0 +1,20 @@
+# ETL and Database Operations Dependencies
+# Install only for ETL tooling and database operations, not for app runtime
+
+# Database connectivity for ETL scripts
+psycopg2-binary==2.9.9
+
+# Data processing for ETL
+pandas==2.1.0
+
+# ETL utilities
+python-dotenv==1.0.0
+
+# Command line progress bars for ETL
+tqdm==4.66.0
+
+# Data validation and conversion
+sqlalchemy==2.0.20  # For schema introspection if needed
+
+# CSV processing enhancements
+chardet==5.2.0  # Character encoding detection

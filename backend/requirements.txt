@@ -2,19 +2,17 @@
 fastapi==0.104.1
 uvicorn[standard]==0.24.0
 
-# Database
-sqlmodel==0.0.14
-alembic==1.13.1
+# Database - Supabase
+supabase==2.8.0
+# psycopg2-binary==2.9.9  # Moved to requirements-etl.txt - only needed for ETL scripts, not runtime
+postgrest==0.11.0
 
-# Authentication & Security
-python-jose[cryptography]==3.3.0
-passlib[bcrypt]==1.7.4
+# Authentication & Security - Supabase
+PyJWT==2.8.0
 python-multipart==0.0.6
 cryptography==46.0.1
 
-# AWS/S3 Storage
-boto3==1.34.34
-botocore==1.34.34
+# Storage - Supabase Storage (included in supabase client)
 
 # Background Tasks
 celery==5.3.4
