@@ -1,0 +1,20 @@
+﻿# === env files ===
+.env
+**/.env
+
+# === dependencies ===
+node_modules/
+**/node_modules/
+
+# === python ===
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# === OS/IDE trash ===
+.DS_Store
+.idea/
+.vscode/
+__pycache__/
+**/__pycache__/
