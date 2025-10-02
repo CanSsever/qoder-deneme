@@ -32,7 +32,7 @@ This document outlines the comprehensive migration strategy for transforming the
 | Component | Current | Target | Purpose |
 |-----------|---------|--------|---------|
 | Database Client | sqlmodel==0.0.14 | supabase==2.* | Database operations |
-| PostgreSQL Driver | N/A | psycopg2-binary | PostgreSQL connectivity |
+| PostgreSQL Driver | N/A | psycopg2-binary (opsiyonel) | Veri migrasyon scriptleri ve tutarlılık kontrolleri |
 | JWT Library | python-jose[cryptography] | PyJWT | Token verification |
 | Authentication | Custom implementation | Supabase Auth | User management |
 | Storage | boto3 (S3) | Supabase Storage | File operations |
@@ -97,6 +97,15 @@ graph LR
 2. Supabase returns JWT with standardized claims
 3. API validates JWT using Supabase shared secret (HS256)
 4. User context extracted from JWT claims without database queries
+
+### Legacy User Migration Runbook
+1. Çıkış almadan önce mevcut kullanıcı veritabanının tam yedeğini alın ve üretim servisini yalnızca okuma moduna alın.
+2. SQLite `users` tablosundaki kullanıcı id, e-posta ve parola hashlerini export eden bir komut dosyası hazırlayın; hash algoritmasının (örn. bcrypt) Supabase ile uyumunu doğrulayın.
+3. Hashler Supabase tarafından destekleniyorsa Supabase Admin API veya `supabase auth import` komutu ile kullanıcıları `auth.users` tablosuna aktarın; desteklenmiyorsa kullanıcıları e-posta ile parola sıfırlama akışına yönlendirecek bir liste oluşturun.
+4. Migrasyon sonrası Supabase Panel üzerinden rastgele örnek kullanıcılarla oturum açmayı test edin; başarısız kayıtları yeniden işlemek için bir retry betiği hazırlayın.
+5. Cutover sonrasında legacy JWT üretim kodu kapatılmadan önce Supabase tarafından verilen yeni JWT ile API uçlarının çalıştığını otomasyon testleriyle doğrulayın.
+6. Tüm kullanıcılar için taşınmış/başarısız durum raporunu arşivleyin ve destek ekibiyle paylaşın.
+
 
 ### Security Model Transformation
 
@@ -280,6 +289,12 @@ Services will be stateless and interact with Supabase through the Python client,
 | `session.commit()` | Automatic commit | Stateless operation |
 | `User relationship queries` | RLS filtered results | Security layer |
 
+#### Supabase Client Token Handling
+- API isteklerinde gelen `Authorization` başlığındaki kullanıcı JWT'si, Supabase Python istemcisine `create_client(..., persist_session=False)` oluşturulduktan sonra `client.auth.set_session(access_token, refresh_token=None)` ile enjekte edilecek.
+- Her servis katmanı çağrısı bu istemci üzerinden PostgREST'e gidecek; böylece RLS politikaları kullanıcı kimliğiyle devrede kalacak.
+- Arka plan işçileri veya cron görevleri için `service_role` anahtarı ile ayrı bir istemci oluşturulacak ve yalnızca yönetim amaçlı RPC çağrılarında kullanılacak, kullanıcı verileri okunurken mutlaka kullanıcı token'ı forward edilecek.
+- Hata ayıklama ve testler için istemci oluşturma fonksiyonu, kullanılan token veya rol bilgisini loglayarak yanlış anahtar kullanımını tespit edecek.
+
 ## Storage Strategy
 
 ### Current Storage Pattern
@@ -301,12 +316,12 @@ outputs/{user_id}/{job_id}.{extension}
 ```
 
 #### Storage Policies
-| Bucket | Operation | Policy | Enforcement |
-|--------|-----------|--------|-------------|
-| uploads | SELECT | Path starts with auth.uid() | User can only access own files |
-| uploads | INSERT | Path starts with auth.uid() | User can only upload to own directory |
-| outputs | SELECT | Path starts with auth.uid() | User can only access own results |
-| outputs | INSERT | Service role only | Only backend can write results |
+| Bucket | Operation | Policy SQL | Enforcement |
+|--------|-----------|-----------|-------------|
+| uploads | SELECT | USING (bucket_id = 'uploads' AND name LIKE auth.uid() || '/%') | Kullanıcılar yalnızca kendi dosyalarını indirebilir |
+| uploads | INSERT | WITH CHECK (bucket_id = 'uploads' AND name LIKE auth.uid() || '/%') | Kullanıcılar sadece kendi klasörlerine yükleyebilir |
+| outputs | SELECT | USING (bucket_id = 'outputs' AND name LIKE auth.uid() || '/%') | Kullanıcılar yalnızca kendi çıktılarını görebilir |
+| outputs | INSERT | WITH CHECK (bucket_id = 'outputs' AND auth.role() = 'service_role') | Sonuç dosyaları yalnızca backend servis rolü ile yazılır |
 
 ### Upload Flow Transformation
 
@@ -420,6 +435,18 @@ graph TD
 2. Implement Row Level Security policies
 3. Create atomic credit operation RPC functions
 4. Set up storage buckets and access policies
+5. Export legacy SQLite data sets (profiles, jobs, credit transactions) to staged CSV/JSON dosyaları
+6. Transform exported data to Supabase şemasına uygun hale getirin (tip dönüşümleri, foreign key doğrulamaları)
+7. Veri yüklemesini Supabase CLI, `psql` veya `pg_copy` ile gerçekleştirin ve başarısız kayıtlar için retry planı hazırlayın
+8. Migrasyon sonrası satır sayısı ve checksum karşılaştırmaları ile doğrulama yapın
+
+#### Data Migration Runbook
+1. Migrasyon penceresini planlayın, yazma trafiğini durdurun ve SQLite dosyasının salt-okunur yedeğini alın.
+2. `sqlite3` veya özel Python scripti ile kaynak tabloları dışa aktarın; UUID/string alanlarının Supabase tipleriyle eşleştiğini doğrulayın.
+3. Veri dönüştürme sırasında zorunlu alanları, varsayılan değerleri ve yabancı anahtar bütünlüğünü kontrol eden otomatik testler yazın.
+4. Yükleme için Supabase hizmet rolü anahtarı kullanan ayrı bir pipeline oluşturun; yükleme sırasında RLS politikalarını geçici olarak devre dışı bırakmayın, bunun yerine `service_role` ile bağlantı kurun.
+5. Yükleme tamamlandığında her tablo için satır sayısı karşılaştırması, örnek kayıt kontrolü ve kritik iş akışlarını kapsayan duman testleri gerçekleştirin.
+6. Başarısız kayıtların listesini kaydedin, gerekirse manuel düzeltme veya yeniden deneme akışı çalıştırın ve rollback koşullarını (SQLite kopyasını tekrar çevrimiçi alma) belgeleyin.
 
 ### Phase 3: Service Layer Refactoring
 1. Replace SQLModel operations with PostgREST calls
@@ -449,8 +476,10 @@ graph TD
 
 - [ ] Environment variables configured for Supabase
 - [ ] Database schema created with RLS policies
+- [ ] Legacy users imported into Supabase Auth ve login testleri geçti
+- [ ] SQLite verisi Supabase'e taşındı ve satır sayısı/hash kontrolleri doğrulandı
 - [ ] JWT validation working with Supabase secret
-- [ ] Service layer methods using PostgREST
+- [ ] Service layer methods using PostgREST with per-request user tokens
 - [ ] Storage policies enforcing user isolation
 - [ ] Legacy authentication endpoints removed
 - [ ] All tests passing with new architecture
