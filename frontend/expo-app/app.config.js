@@ -38,11 +38,19 @@ function resolveLocalIp() {
  * Compute the API base URL.
  * - Respect EXPO_PUBLIC_API_URL when provided.
  * - Otherwise use the detected LAN IP with the configured port.
+ * - Special handling for Android emulator (10.0.2.2) and iOS simulator (localhost)
  * - Fall back to localhost to keep web builds working.
+ * 
+ * Platform-specific defaults:
+ * - Android Emulator: http://10.0.2.2:PORT (localhost on host machine)
+ * - iOS Simulator: http://localhost:PORT or http://127.0.0.1:PORT
+ * - Physical devices: http://LAN_IP:PORT (detected local network IP)
+ * - Web: http://localhost:PORT
  */
 function resolveApiUrl() {
   const explicitUrl = process.env.EXPO_PUBLIC_API_URL;
   if (explicitUrl && explicitUrl.trim().length > 0) {
+    console.log('[app.config] Using explicit API URL:', explicitUrl);
     return explicitUrl.trim();
   }
 
@@ -50,10 +58,16 @@ function resolveApiUrl() {
   const localIp = resolveLocalIp();
 
   if (localIp) {
-    return `http://${localIp}:${port}`;
+    const apiUrl = `http://${localIp}:${port}`;
+    console.log('[app.config] Detected LAN IP:', localIp);
+    console.log('[app.config] Using API URL:', apiUrl);
+    console.log('[app.config] Note: Android emulator should override with 10.0.2.2');
+    return apiUrl;
   }
 
-  return `http://127.0.0.1:${port}`;
+  const fallbackUrl = `http://127.0.0.1:${port}`;
+  console.log('[app.config] No LAN IP detected, using fallback:', fallbackUrl);
+  return fallbackUrl;
 }
 
 function resolveApiTimeout() {

@@ -1,31 +1,33 @@
 /**
- * OneShot SDK client configuration and initialization
+ * OneShot SDK client configuration and initialization with platform-aware settings
  */
 import { OneShotClient } from 'oneshot-sdk';
-import Constants from 'expo-constants';
+import { getPlatformConfig, logPlatformConfig } from './platformConfig';
 
-// Get configuration from environment (see app.config.js for defaults)
-const getApiUrl = (): string => {
-  // Expo injects the value via app.config.js (auto-detected LAN IP unless overridden)
-  return Constants.expoConfig?.extra?.apiUrl || 'http://localhost:8000';
-};
+// Get platform-aware configuration
+const platformConfig = getPlatformConfig();
 
-const getApiTimeout = (): number => {
-  return Constants.expoConfig?.extra?.apiTimeout || 30000;
-};
+// Log configuration in development
+if (__DEV__) {
+  logPlatformConfig();
+}
 
-// Create and export the configured SDK client with enhanced mobile settings
+// Create and export the configured SDK client with platform-aware settings
 export const oneShotClient = new OneShotClient({
-  baseUrl: getApiUrl(),
-  timeout: getApiTimeout(),
-  retryAttempts: 5, // Increased for mobile scenarios
+  baseUrl: platformConfig.apiUrl,
+  timeout: platformConfig.timeout,
+  retryAttempts: platformConfig.retryAttempts,
   retryDelay: 1000 // Progressive backoff will be applied automatically
 });
 
 // Configuration constants
 export const CONFIG = {
-  API_URL: getApiUrl(),
-  API_TIMEOUT: getApiTimeout(),
+  API_URL: platformConfig.apiUrl,
+  API_TIMEOUT: platformConfig.timeout,
+  RETRY_ATTEMPTS: platformConfig.retryAttempts,
+  PLATFORM: platformConfig.platform,
+  IS_EMULATOR: platformConfig.isEmulator,
+  IS_PHYSICAL_DEVICE: platformConfig.isPhysicalDevice,
   POLLING_INTERVAL: 2000, // 2 seconds
   MAX_FILE_SIZE: 20 * 1024 * 1024, // 20MB
   ALLOWED_IMAGE_TYPES: ['image/jpeg', 'image/png', 'image/webp'],
@@ -38,7 +40,12 @@ export const CONFIG = {
 if (__DEV__) {
   // Helpful trace so developers can confirm which endpoint is being used
   // eslint-disable-next-line no-console
-  console.info('[OneShot] Using API base URL:', CONFIG.API_URL);
+  console.info('[OneShot] SDK Configuration:');
+  console.info('  API URL:', CONFIG.API_URL);
+  console.info('  Timeout:', CONFIG.API_TIMEOUT + 'ms');
+  console.info('  Retry Attempts:', CONFIG.RETRY_ATTEMPTS);
+  console.info('  Platform:', CONFIG.PLATFORM);
+  console.info('  Device Type:', CONFIG.IS_EMULATOR ? 'Emulator/Simulator' : 'Physical Device');
 }
 
 /**
