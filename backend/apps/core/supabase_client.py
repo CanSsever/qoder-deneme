@@ -3,7 +3,7 @@ Supabase client wrapper for connection management and operations.
 """
 import os
 from typing import Optional, Dict, Any, List
-from supabase import create_client, Client
+from supabase import create_client, Client, ClientOptions
 from postgrest import APIResponse
 import logging
 from .settings import settings
@@ -16,10 +16,8 @@ class SupabaseClient:
     
     def __init__(self):
         self._client: Optional[Client] = None
-        if hasattr(settings, 'supabase_url') and hasattr(settings, 'supabase_anon_key'):
-            self._initialize_client()
-        else:
-            logger.warning("Supabase configuration not found, client not initialized")
+        if not (getattr(settings, "supabase_url", None) and getattr(settings, "supabase_anon_key", None)):
+            logger.warning("Supabase configuration not found; client will initialize on first use")
     
     def _initialize_client(self):
         """Initialize the Supabase client with configuration."""
@@ -27,15 +25,15 @@ class SupabaseClient:
             if not settings.supabase_url or not settings.supabase_anon_key:
                 raise ValueError("Supabase URL and anon key must be configured")
             
+            options = ClientOptions(
+                auto_refresh_token=True,
+                persist_session=True
+            )
+
             self._client = create_client(
                 supabase_url=settings.supabase_url,
                 supabase_key=settings.supabase_anon_key,
-                options={
-                    "auth": {
-                        "auto_refresh_token": True,
-                        "persist_session": True
-                    }
-                }
+                options=options
             )
             logger.info("Supabase client initialized successfully")
             

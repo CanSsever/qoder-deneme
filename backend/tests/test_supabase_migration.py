@@ -176,7 +176,7 @@ if __name__ == "__main__":
         email="test@example.com",
         payload={"sub": "test-user-id"}
     )
-    print(f"✓ User creation: {user}")
+    print(f"[OK] User creation: {user}")
     
     # Test upload instructions
     instructions = UploadService.get_upload_instructions(
@@ -185,10 +185,10 @@ if __name__ == "__main__":
         content_type="image/jpeg",
         file_size=1000
     )
-    print(f"✓ Upload instructions: {instructions['bucket']}/{instructions['file_path']}")
+    print(f"[OK] Upload instructions: {instructions['bucket']}/{instructions['file_path']}")
     
     # Test credit costs
     costs = JobService.CREDIT_COSTS
-    print(f"✓ Credit costs: {costs}")
+    print(f"[OK] Credit costs: {costs}")
     
     print("Basic tests completed successfully!")

@@ -32,20 +32,18 @@ This will start the FastAPI backend on `0.0.0.0:8000`, making it accessible from
 
 ## Step 3: Configure the Expo App
 
-1. Copy `.env.example` to `.env`:
+1. Copy `.env.example` to `.env` (if you have not already):
    ```bash
    cp .env.example .env
    ```
 
-2. Update the `API_URL` in `.env` with your machine's LAN IP:
+2. By default the Expo config now autodetects your current LAN IP each time it starts.
+   Only set `EXPO_PUBLIC_API_URL` when you need to override the detected value:
    ```env
-   API_URL=http://YOUR_LAN_IP:8000
+   EXPO_PUBLIC_API_URL=http://YOUR_LAN_IP:8000
+   EXPO_PUBLIC_API_PORT=8000
    ```
-   
-   For example:
-   ```env
-   API_URL=http://192.168.1.100:8000
-   ```
+   Leave `EXPO_PUBLIC_API_URL` blank to keep auto-detection.
 
 ## Step 4: Configure Windows Firewall
 
@@ -53,8 +51,8 @@ To allow the mobile app to connect to your backend:
 
 1. Open Windows Defender Firewall
 2. Click "Advanced settings"
-3. Click "Inbound Rules" → "New Rule"
-4. Select "Port" → "TCP" → Specific local ports: `8000`
+3. Click "Inbound Rules" -> "New Rule"
+4. Select "Port" -> "TCP" -> Specific local ports: `8000`
 5. Allow the connection
 6. Apply to all profiles (Domain, Private, Public)
 7. Name the rule "OneShot API"
@@ -80,7 +78,7 @@ If you're having trouble with local network connections, you can use ngrok:
 3. In another terminal, run: `ngrok http 8000`
 4. Update your `.env` file with the ngrok URL:
    ```env
-   API_URL=https://YOUR_NGROK_URL.ngrok.io
+   EXPO_PUBLIC_API_URL=https://YOUR_NGROK_URL.ngrok.io
    ```
 
 ## Troubleshooting
@@ -90,14 +88,15 @@ If you're having trouble with local network connections, you can use ngrok:
 1. Verify the backend is running with `cd backend && make dev`
 2. Check that your LAN IP is correct
 3. Ensure Windows Firewall allows connections on port 8000
-4. Test connectivity by accessing `http://YOUR_LAN_IP:8000/healthz` from your mobile browser
-5. Try using ngrok as an alternative
+4. Confirm that the Expo logs show the correct autodetected API URL
+5. Test connectivity by accessing `http://YOUR_LAN_IP:8000/healthz` from your mobile browser
+6. Try using ngrok as an alternative
 
 ### Registration/Login Issues
 
 1. Ensure the backend database is set up: `make migrate`
 2. Check that the API is responding correctly by testing endpoints manually
-3. Verify your API_URL in the .env file matches your backend address
+3. Verify `EXPO_PUBLIC_API_URL` (if set) points to a reachable backend
 
 ## Development Workflow
 

@@ -4,10 +4,9 @@
 import { OneShotClient } from 'oneshot-sdk';
 import Constants from 'expo-constants';
 
-// Get configuration from environment
+// Get configuration from environment (see app.config.js for defaults)
 const getApiUrl = (): string => {
-  // In development, use the API_URL from app.json extra config
-  // In production, this should come from your build configuration
+  // Expo injects the value via app.config.js (auto-detected LAN IP unless overridden)
   return Constants.expoConfig?.extra?.apiUrl || 'http://localhost:8000';
 };
 
@@ -35,6 +34,12 @@ export const CONFIG = {
   CONNECTION_RETRY_ATTEMPTS: 3,
   CONNECTION_RETRY_DELAY: 2000
 } as const;
+
+if (__DEV__) {
+  // Helpful trace so developers can confirm which endpoint is being used
+  // eslint-disable-next-line no-console
+  console.info('[OneShot] Using API base URL:', CONFIG.API_URL);
+}
 
 /**
  * Network diagnostic utilities

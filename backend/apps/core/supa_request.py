@@ -10,20 +10,41 @@ Key principles:
 - Credits RPC uses service role with SECURITY DEFINER functions
 """
 
-import os
-from typing import Optional
+from typing import Optional, Tuple
 from supabase import create_client, Client
 import logging
 
+from apps.core.settings import settings
+
 logger = logging.getLogger(__name__)
 
-# Environment variables
-SUPABASE_URL = os.getenv("SUPABASE_URL")
-SUPABASE_ANON_KEY = os.getenv("SUPABASE_ANON_KEY")
-SUPABASE_SERVICE_ROLE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
 
-if not all([SUPABASE_URL, SUPABASE_ANON_KEY, SUPABASE_SERVICE_ROLE_KEY]):
-    logger.warning("Missing Supabase environment variables")
+def _get_supabase_config() -> Tuple[str, str, str]:
+    """
+    Retrieve Supabase connection details from settings and ensure they exist.
+    """
+    url = settings.supabase_url
+    anon = settings.supabase_anon_key
+    service_key = settings.supabase_service_role_key
+
+    missing = [
+        name
+        for name, value in (
+            ("SUPABASE_URL", url),
+            ("SUPABASE_ANON_KEY", anon),
+            ("SUPABASE_SERVICE_ROLE_KEY", service_key),
+        )
+        if not value
+    ]
+
+    if missing:
+        joined = ", ".join(missing)
+        raise RuntimeError(
+            f"Supabase configuration missing required values: {joined}. "
+            "Ensure backend/.env is populated or environment variables are set."
+        )
+
+    return url, anon, service_key
 
 
 def user_client(user_jwt: str) -> Client:
@@ -47,11 +68,10 @@ def user_client(user_jwt: str) -> Client:
         client = user_client(token)
         jobs = client.table("jobs").select("*").execute()  # RLS enforced
     """
-    if not SUPABASE_URL or not SUPABASE_ANON_KEY:
-        raise ValueError("SUPABASE_URL and SUPABASE_ANON_KEY must be configured")
+    url, anon_key, _ = _get_supabase_config()
     
     # Create client with anon key
-    client = create_client(SUPABASE_URL, SUPABASE_ANON_KEY)
+    client = create_client(url, anon_key)
     
     # Set the user JWT token for PostgREST authentication
     client.postgrest.auth(user_jwt)
@@ -84,10 +104,9 @@ def service_client() -> Client:
         # Only for controlled admin operations
         result = client.rpc("increment_credits", {"user_id": user_id, "amount": 10})
     """
-    if not SUPABASE_URL or not SUPABASE_SERVICE_ROLE_KEY:
-        raise ValueError("SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY must be configured")
-    
-    client = create_client(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
+    url, _, service_key = _get_supabase_config()
+
+    client = create_client(url, service_key)
     
     logger.debug("Created service role Supabase client")
     return client

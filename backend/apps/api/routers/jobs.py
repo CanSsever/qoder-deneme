@@ -179,28 +179,156 @@ async def list_jobs(
 
 @router.post("/{job_id}/run")
 def run_job(job_id: str, token: str = Depends(require_token)):
-    """Run a job with the configured provider (idempotent)."""
-    from apps.core.supa_request import user_client
+    """Run a job with the configured provider (idempotent with credit protection)."""
+    from apps.core.supa_request import user_client, service_client
+    import jwt
+    from apps.core.settings import settings
     
+    # Get job with user authentication (RLS enforced)
     cli = user_client(token)
     job = cli.table("jobs").select("*").eq("id", job_id).single().execute().data
     if not job:
         raise HTTPException(404, "Job not found")
+    
+    # IDEMPOTENCY CHECK: If job already succeeded with output, return existing result
     if job.get("status") == "succeeded" and job.get("output_image_url"):
-        return {"status": "succeeded", "job": job}  # idempotent
+        logger.info(
+            "Job already completed, returning cached result (idempotent)",
+            job_id=job_id,
+            status=job["status"]
+        )
+        return {"status": "succeeded", "job": job}
+    
+    # CREDIT PROTECTION: Only charge credits on first execution
+    credits_charged = False
+    service_cli = service_client()
+    
+    # Get credit cost for job type
+    credit_costs = {
+        "restore": 1,
+        "upscale": 1,
+        "face_swap": 2,
+        "face_restoration": 1
+    }
+    credits_required = credit_costs.get(job["job_type"], 1)
+    
+    # Check if this is the first run (no previous credit transaction for this job)
+    existing_transaction = service_cli.table("credit_transactions").select("id").eq("reference_id", job_id).limit(1).execute()
+    
+    if not existing_transaction.data:
+        # First run - validate and debit credits
+        uid = jwt.decode(token, settings.supabase_jwt_secret, algorithms=["HS256"])["sub"]
+        
+        logger.info(
+            "First execution, validating and debiting credits",
+            job_id=job_id,
+            user_id=uid,
+            credits_required=credits_required
+        )
+        
+        # Atomic credit validation and debit
+        has_sufficient_credits = service_cli.rpc("validate_and_debit_credits", {
+            "target_user_id": uid,
+            "credit_amount": credits_required,
+            "job_ref_id": job_id
+        }).execute()
+        
+        if not has_sufficient_credits.data:
+            logger.warning(
+                "Insufficient credits for job execution",
+                job_id=job_id,
+                user_id=uid,
+                credits_required=credits_required
+            )
+            raise HTTPException(402, f"Insufficient credits. Required: {credits_required}")
+        
+        credits_charged = True
+        logger.info(
+            "Credits debited successfully",
+            job_id=job_id,
+            user_id=uid,
+            credits_required=credits_required
+        )
+    else:
+        logger.info(
+            "Subsequent execution, credits already charged",
+            job_id=job_id,
+            existing_transaction_id=existing_transaction.data[0]["id"]
+        )
 
+    # Update job status to running
     cli.table("jobs").update({"status": "running"}).eq("id", job_id).execute()
+    
     provider = get_provider()
     try:
+        logger.info(
+            "Starting job processing",
+            job_id=job_id,
+            job_type=job["job_type"],
+            provider=provider.__class__.__name__
+        )
+        
+        # Execute the job based on type
         if job["job_type"] == "restore":
             result = provider.restore(token=token, job=job)
         elif job["job_type"] == "upscale":
             result = provider.upscale(token=token, job=job)
         else:
-            raise HTTPException(400, "Unsupported job_type")
-        upd = {"status": "succeeded", "progress": 1.0, "output_image_url": result["output_path"]}
+            raise HTTPException(400, f"Unsupported job_type: {job['job_type']}")
+        
+        # Update job with success status and output
+        upd = {
+            "status": "succeeded", 
+            "progress": 1.0, 
+            "output_image_url": result["output_path"]
+        }
         job2 = cli.table("jobs").update(upd).eq("id", job_id).execute().data[0]
+        
+        logger.info(
+            "Job completed successfully",
+            job_id=job_id,
+            output_path=result["output_path"]
+        )
+        
         return {"status": "succeeded", "job": job2}
+        
     except Exception as e:
-        job2 = cli.table("jobs").update({"status": "failed", "error_message": str(e)}).eq("id", job_id).execute().data[0]
+        logger.error(
+            "Job processing failed",
+            job_id=job_id,
+            error=str(e),
+            credits_charged=credits_charged
+        )
+        
+        # Update job with failure status
+        job2 = cli.table("jobs").update({
+            "status": "failed", 
+            "error_message": str(e)
+        }).eq("id", job_id).execute().data[0]
+        
+        # CREDIT REFUND: If credits were charged and job failed, refund them
+        if credits_charged:
+            uid = jwt.decode(token, settings.supabase_jwt_secret, algorithms=["HS256"])["sub"]
+            logger.info(
+                "Refunding credits due to job failure",
+                job_id=job_id,
+                user_id=uid,
+                credits_refunded=credits_required
+            )
+            
+            # Refund credits
+            service_cli.rpc("increment_credits", {
+                "target_user_id": uid,
+                "credit_amount": credits_required
+            }).execute()
+            
+            # Create refund transaction record
+            service_cli.table("credit_transactions").insert({
+                "user_id": uid,
+                "amount": credits_required,
+                "transaction_type": "refund",
+                "reference_id": job_id,
+                "metadata": {"reason": "job_failed", "error": str(e)}
+            }).execute()
+        
         raise HTTPException(500, f"Processing failed: {e}")

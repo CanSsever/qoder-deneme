@@ -2,9 +2,9 @@
 
 This document provides a production-ready migration path from SQLite to Supabase with comprehensive security measures, user migration strategies, and ETL tooling.
 
-## 🔐 Security Audit Items - RESOLVED
+## [SECURE] Security Audit Items - RESOLVED
 
-### ✅ CRITICAL - User Migration Plan
+### [OK] CRITICAL - User Migration Plan
 **Status: COMPLETE**
 - **Solution**: Comprehensive user migration strategy with two paths:
   - **Path A (Recommended)**: Passwordless magic link migration
@@ -14,7 +14,7 @@ This document provides a production-ready migration path from SQLite to Supabase
   - `tools/invite_existing_users.py` - Automated invitation script
 - **Usage**: `make migrate-users` or `python tools/invite_existing_users.py --csv data/legacy_users.csv`
 
-### ✅ CRITICAL - SQLite → Postgres ETL Strategy
+### [OK] CRITICAL - SQLite -> Postgres ETL Strategy
 **Status: COMPLETE**
 - **Solution**: Safe ETL process with staging tables and validation
 - **Files Added**:
@@ -27,7 +27,7 @@ This document provides a production-ready migration path from SQLite to Supabase
   - Data integrity checks
   - Rollback capability
 
-### ✅ HIGH - RLS Bypass Prevention
+### [OK] HIGH - RLS Bypass Prevention
 **Status: COMPLETE**
 - **Solution**: Per-request user JWT propagation with proper client separation
 - **Files Added**:
@@ -38,7 +38,7 @@ This document provides a production-ready migration path from SQLite to Supabase
   - Admin operations use `service_client()` only for controlled functions
   - Credit operations via SECURITY DEFINER RPC functions
 
-### ✅ MEDIUM - psycopg2-binary Dependency
+### [OK] MEDIUM - psycopg2-binary Dependency
 **Status: COMPLETE**
 - **Solution**: Separated runtime vs ETL dependencies
 - **Changes**:
@@ -46,7 +46,7 @@ This document provides a production-ready migration path from SQLite to Supabase
   - Added comment in main requirements explaining separation
   - Only needed for ETL scripts and backup verification
 
-### ✅ MEDIUM - Storage RLS Policies
+### [OK] MEDIUM - Storage RLS Policies
 **Status: COMPLETE**
 - **Solution**: Correct SQL syntax with LIKE pattern matching
 - **Files Added**:
@@ -56,7 +56,7 @@ This document provides a production-ready migration path from SQLite to Supabase
   - Real SQL syntax: `name LIKE auth.uid()::text || '/%'`
   - Service role policies for admin operations
 
-## 🚀 Enhanced Implementation
+## [ROCKET] Enhanced Implementation
 
 ### Per-Request Authentication
 All user-scoped endpoints now use proper JWT authentication:
@@ -86,7 +86,7 @@ async def create_job(
     job = JobService.create_job(current_user, job_data, user_token)
 ```
 
-## 🧪 Testing & Validation
+## [LAB] Testing & Validation
 
 ### RLS Smoke Tests
 **Files Added**: `tests/smoke_rls.sh`
@@ -102,7 +102,7 @@ New make targets added:
 - `make smoke-rls` - Test RLS enforcement
 - `make install-etl` - Install ETL dependencies
 
-## 📋 Migration Checklist
+## [DOCS] Migration Checklist
 
 ### Pre-Migration
 - [ ] Export legacy user emails: `sqlite3 legacy.db ".mode csv" ".output users.csv" "SELECT email FROM users"`
@@ -132,7 +132,7 @@ New make targets added:
 - [ ] Validate credit system integrity
 - [ ] Test file uploads with proper RLS
 
-## 🔧 Commands Reference
+## [TOOLS] Commands Reference
 
 ### Development
 ```bash
@@ -173,7 +173,7 @@ curl -H "Authorization: Bearer $TOKEN" http://localhost:8000/api/bootstrap-profi
 \i supabase/patch_storage_policies.sql
 ```
 
-## 🛡️ Security Measures
+## [SHIELD] Security Measures
 
 ### Authentication Flow
 1. **Client Authentication**: Users authenticate with Supabase Auth
@@ -193,7 +193,7 @@ curl -H "Authorization: Bearer $TOKEN" http://localhost:8000/api/bootstrap-profi
 - **Data Validation**: ETL process includes integrity checks
 - **Rollback Support**: Staging tables enable safe rollback
 
-## 📚 Documentation Files
+## [GUIDE] Documentation Files
 
 ### Strategy & Planning
 - `docs/migration/users.md` - User migration strategy
@@ -213,18 +213,18 @@ curl -H "Authorization: Bearer $TOKEN" http://localhost:8000/api/bootstrap-profi
 - `requirements-etl.txt` - ETL-specific dependencies
 - Updated `requirements.txt` - Runtime dependencies
 
-## 🎯 Success Criteria
+## [TARGET] Success Criteria
 
 The migration is production-ready when:
-- ✅ All audit items resolved
-- ✅ User migration strategy documented and tested
-- ✅ ETL process documented with validation
-- ✅ RLS properly enforced (confirmed by smoke tests)
-- ✅ Storage policies correctly implemented
-- ✅ Dependencies properly organized
-- ✅ All endpoints use per-request authentication
+- [OK] All audit items resolved
+- [OK] User migration strategy documented and tested
+- [OK] ETL process documented with validation
+- [OK] RLS properly enforced (confirmed by smoke tests)
+- [OK] Storage policies correctly implemented
+- [OK] Dependencies properly organized
+- [OK] All endpoints use per-request authentication
 
-## 🚨 Important Notes
+## [ALERT] Important Notes
 
 1. **Test First**: Always test migration scripts with a subset of data
 2. **Backup Everything**: Maintain legacy system until migration verified

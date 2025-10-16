@@ -16,6 +16,13 @@ help:
 	@echo "  make migrate-users-dry  - Preview user migration (dry run)"
 	@echo "  make smoke-rls          - Test RLS enforcement"
 	@echo ""
+	@echo "Validation:"
+	@echo "  make audit              - Run Supabase migration audit"
+	@echo "  make test-rls           - Test RLS isolation between users"
+	@echo "  make scan-service-role  - Scan for service role leaks"
+	@echo "  make test-model         - Test real Replicate integration"
+	@echo "  make validate-prod      - Complete production readiness validation"
+	@echo ""
 	@echo "Testing:"
 	@echo "  make test       - Run tests"
 	@echo "  make test-e2e   - Run E2E tests with mock providers"
@@ -413,3 +420,48 @@ test-rls:
 scan-service-role:
 	@echo "🔍 Scanning for service role leaks in user paths..."
 	bash ../tools/scan_service_role_leaks.sh
+
+# Test real Replicate model integration
+test-model:
+	@echo "🔧 Testing Real Replicate Integration..."
+	@if [ -z "$$TOKEN_A" ] || [ -z "$$TOKEN_B" ]; then \
+		echo "❌ TOKEN_A and TOKEN_B environment variables required"; \
+		echo "Set TOKEN_A=<jwt_user_a> TOKEN_B=<jwt_user_b>"; \
+		exit 1; \
+	fi
+	@if [ "$$MODEL_PROVIDER" != "replicate" ]; then \
+		echo "❌ MODEL_PROVIDER must be set to 'replicate'"; \
+		echo "Set MODEL_PROVIDER=replicate"; \
+		exit 1; \
+	fi
+	@if [ -z "$$REPLICATE_API_TOKEN" ]; then \
+		echo "❌ REPLICATE_API_TOKEN environment variable required"; \
+		echo "Set REPLICATE_API_TOKEN=<your_token>"; \
+		exit 1; \
+	fi
+	@echo "Running cross-platform model smoke tests..."
+	@if command -v bash >/dev/null 2>&1; then \
+		TOKEN_A=$$TOKEN_A TOKEN_B=$$TOKEN_B bash backend/tests/model_smoke.sh; \
+	elif command -v pwsh >/dev/null 2>&1; then \
+		pwsh -File backend/tests/model_smoke.ps1; \
+	else \
+		echo "❌ Neither bash nor PowerShell found. Cannot run smoke tests."; \
+		exit 1; \
+	fi
+
+# Complete production readiness validation
+validate-prod:
+	@echo "🚀 PRODUCTION READINESS VALIDATION"
+	@echo "=================================="
+	@echo "Running complete validation sequence..."
+	@echo ""
+	make audit
+	@echo ""
+	make scan-service-role
+	@echo ""
+	make test-rls
+	@echo ""
+	make test-model
+	@echo ""
+	@echo "✅ ALL VALIDATIONS PASSED!"
+	@echo "READY FOR PROD MODEL TRAFFIC"

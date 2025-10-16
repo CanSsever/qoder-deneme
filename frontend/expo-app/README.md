@@ -4,12 +4,12 @@ A complete mobile app example demonstrating integration with the OneShot Face Sw
 
 ## Features
 
-- 🔐 **Authentication** - Login and registration with demo mode
-- 📸 **Image Upload** - Camera and gallery integration
-- 🎨 **Job Types** - Face restoration, face swap, and upscaling
-- ⏳ **Real-time Progress** - Live job status updates
-- 🖼️ **Results Display** - View and share processed images
-- 📱 **Mobile Optimized** - Responsive design for iOS and Android
+- [AUTH] Login and registration with demo mode
+- [CAMERA] Camera and gallery integration
+- [PALETTE] Face restoration, swap, and upscale job types
+- [TIMER] Live job status updates
+- [RESULTS] Processed image viewer with sharing
+- [MOBILE] Optimised for iOS and Android
 
 ## Quick Start
 
@@ -30,7 +30,7 @@ A complete mobile app example demonstrating integration with the OneShot Face Sw
 2. **Configure environment:**
    ```bash
    cp .env.example .env
-   # Edit .env with your API URL
+   # Only update values if you need custom overrides
    ```
 
 3. **Start the app:**
@@ -47,50 +47,33 @@ A complete mobile app example demonstrating integration with the OneShot Face Sw
 
 ## Environment Configuration
 
-Create a `.env` file with your settings:
+Create a `.env` file (copied from `.env.example`) to override detected values when needed:
 
 ```env
-# OneShot API Configuration
-API_URL=http://localhost:8000
-API_TIMEOUT=30000
-
-# Development Settings
-DEV_MODE=true
-
-# Optional: API Key for testing (instead of login)
-# API_KEY=your-test-api-key
+# Optional: override automatically detected API endpoint
+EXPO_PUBLIC_API_URL=
+EXPO_PUBLIC_API_PORT=8000
+EXPO_PUBLIC_API_TIMEOUT=30000
 ```
 
-### Local Development
-
-For local development with the backend:
-
-```env
-# If running backend locally
-API_URL=http://localhost:8000
-
-# If using Docker
-API_URL=http://192.168.1.100:8000  # Replace with your machine's IP
-
-# Production
-API_URL=https://api.oneshot.com
-```
+> ℹ️ The Expo config now autodetects your current LAN IP. Only set `EXPO_PUBLIC_API_URL`
+> when you need a custom domain (for example, an ngrok/cloudflared tunnel or staging backend).
 
 ## App Structure
 
 ```
 src/
-├── screens/           # Main app screens
-│   ├── LoginScreen.tsx
-│   ├── RegisterScreen.tsx
-│   ├── UploadScreen.tsx  
-│   ├── ProgressScreen.tsx
-│   └── ResultScreen.tsx
-├── components/        # Reusable components
-├── types/            # TypeScript definitions
-│   └── navigation.ts
-└── utils/            # Utilities and configuration
-    └── client.ts     # SDK client setup
+|--- screens/           # Main app screens
+|   |--- LoginScreen.tsx
+|   |--- RegisterScreen.tsx
+|   |--- UploadScreen.tsx  
+|   |--- ProgressScreen.tsx
+|   `--- ResultScreen.tsx
+|--- components/        # Reusable components
+|--- types/            # TypeScript definitions
+|   `--- navigation.ts
+`--- utils/            # Utilities and configuration
+    `--- client.ts     # SDK client setup
 ```
 
 ## Usage Guide
@@ -205,7 +188,7 @@ await client.register(email, password);
 
 // Or use API key
 const client = new OneShotClient({
-  baseUrl: API_URL,
+  baseUrl: CONFIG.API_URL,
   apiKey: 'your-api-key'
 });
 ```
@@ -380,9 +363,8 @@ eas build --platform all
 Production configuration:
 
 ```env
-API_URL=https://api.oneshot.com
-API_TIMEOUT=30000
-DEV_MODE=false
+EXPO_PUBLIC_API_URL=https://api.oneshot.com
+EXPO_PUBLIC_API_TIMEOUT=30000
 ```
 
 ## Troubleshooting
@@ -390,7 +372,7 @@ DEV_MODE=false
 ### Common Issues
 
 1. **Network Errors:**
-   - Check API_URL in .env
+   - Check `EXPO_PUBLIC_API_URL` in `.env` (or let auto-detect handle it)
    - Verify backend is running
    - Check device network connectivity
 
@@ -416,7 +398,7 @@ Enable debug logging:
 ```typescript
 // In client.ts
 const client = new OneShotClient({
-  baseUrl: API_URL,
+  baseUrl: CONFIG.API_URL,
   // Add debug flag when available
 });
 

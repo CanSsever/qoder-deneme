@@ -10,6 +10,7 @@ from uuid import UUID, uuid4
 import structlog
 import time
 import os
+import sys
 from apps.core.security import SupabaseUser
 from apps.core.exceptions import AuthenticationError, NotFoundError, ValidationError
 from apps.core.settings import settings
@@ -69,14 +70,38 @@ class ProfileService:
             return None
     
     @staticmethod
-    def get_profile(user_jwt: str) -> Optional[Dict[str, Any]]:
-        """Get user profile using user-scoped client."""
+    def get_profile(user_reference: str) -> Optional[Dict[str, Any]]:
+        """
+        Get user profile by token or user ID.
+        
+        Accepts either a Supabase JWT (default router behaviour) or a raw user ID
+        for backwards compatibility with legacy callers and unit tests.
+        """
+        if not user_reference:
+            return None
+        
+        # Treat string with two dots as JWT token
+        is_token = user_reference.count(".") == 2
+        
+        if is_token:
+            try:
+                client = user_client(user_reference)
+                response = client.table("profiles").select("*").single().execute()
+                return response.data if response.data else None
+            except Exception as e:
+                logger.error(f"Failed to get profile via user token: {e}")
+                return None
+        
+        # Fallback to service role client using explicit user ID
         try:
-            client = user_client(user_jwt)
-            response = client.table("profiles").select("*").execute()
-            return response.data[0] if response.data else None
+            package_supabase_client = getattr(
+                sys.modules.get("apps.api.services"),
+                "supabase_client",
+                supabase_client,
+            )
+            return package_supabase_client.get_profile(user_reference)
         except Exception as e:
-            logger.error(f"Failed to get profile: {e}")
+            logger.error(f"Failed to get profile for user {user_reference}: {e}")
             return None
 
 
@@ -85,10 +110,12 @@ class UploadService:
     
     @staticmethod
     def get_upload_instructions(
-        user_jwt: str,
-        filename: str, 
-        content_type: str, 
-        file_size: int
+        *,
+        filename: str,
+        content_type: str,
+        file_size: int,
+        user_jwt: Optional[str] = None,
+        user_id: Optional[str] = None
     ) -> Dict[str, Any]:
         """Get upload instructions for Supabase Storage using user authentication."""
         # Validate file size
@@ -100,29 +127,36 @@ class UploadService:
         if not content_type.startswith('image/'):
             raise ValidationError("Only image files are allowed")
         
-        # Extract user ID from JWT token
-        try:
-            import jwt
-            payload = jwt.decode(user_jwt, settings.supabase_jwt_secret, algorithms=["HS256"])
-            user_id = payload.get("sub")
-            if not user_id:
-                raise ValidationError("Invalid token")
-        except Exception as e:
-            raise ValidationError("Token validation failed")
+        # Determine user identifier from JWT or explicit value
+        resolved_user_id = user_id
+        
+        if not resolved_user_id and user_jwt:
+            try:
+                import jwt
+                payload = jwt.decode(user_jwt, settings.supabase_jwt_secret, algorithms=["HS256"])
+                resolved_user_id = payload.get("sub")
+            except Exception as exc:
+                raise ValidationError("Token validation failed") from exc
+        
+        if not resolved_user_id:
+            raise ValidationError("User identifier required for upload instructions")
         
         # Generate unique file path
         file_extension = os.path.splitext(filename)[1]
         unique_filename = f"{uuid4()}{file_extension}"
-        file_path = f"{user_id}/{unique_filename}"
+        file_path = f"{resolved_user_id}/{unique_filename}"
+        
+        headers = {
+            "Content-Type": content_type
+        }
+        if user_jwt:
+            headers["Authorization"] = f"Bearer {user_jwt}"
         
         return {
             "bucket": "uploads",
             "file_path": file_path,
             "upload_url": f"{settings.supabase_url}/storage/v1/object/uploads/{file_path}",
-            "headers": {
-                "Authorization": f"Bearer {user_jwt}",  # Use user JWT, not anon key
-                "Content-Type": content_type
-            },
+            "headers": headers,
             "method": "POST"
         }
     

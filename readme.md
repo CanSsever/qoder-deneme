@@ -4,7 +4,7 @@ A production-ready FastAPI backend for AI-powered face swapping with advanced fe
 
 ## Features
 
-### 🚀 **Production Features v2.0 - GPU Integration**
+### [ROCKET] **Production Features v2.0 - GPU Integration**
 - **Real GPU Processing**: ComfyUI local and RunPod serverless provider integration
 - **Provider Abstraction**: Switchable GPU providers (ComfyUI Local, RunPod Serverless)
 - **Advanced Security**: Comprehensive image validation, size limits, MIME type checking, magic byte verification
@@ -14,7 +14,7 @@ A production-ready FastAPI backend for AI-powered face swapping with advanced fe
 - **Pipeline Validation**: Pydantic-based parameter validation for all AI operations
 - **S3 Integration**: Secure file upload/download with temporary file handling
 
-### 🏗️ **Advanced Production Features (v2.0)**
+### [BUILD] **Advanced Production Features (v2.0)**
 - **Queue & GPU Integration**: Celery + Redis background job processing with real GPU providers
 - **Realistic Pipeline Parameters**: Advanced job validation with face restoration, upscaling, and custom parameters
 - **Rate Limiting**: IP and user-based rate limiting with slowapi and Redis backend
@@ -23,7 +23,7 @@ A production-ready FastAPI backend for AI-powered face swapping with advanced fe
 - **Docker & Local Development**: Full Docker Compose setup with Redis and Celery workers
 - **Comprehensive Testing**: 100+ tests with pytest, coverage reporting, E2E tests with mock providers
 
-### 🔧 **Core Backend Features**
+### [TOOLS] **Core Backend Features**
 - **FastAPI Framework**: Async REST API with automatic OpenAPI documentation
 - **Database**: SQLModel ORM with Alembic migrations
 - **Authentication**: JWT-based auth with bcrypt password hashing
@@ -114,7 +114,7 @@ make coverage   # Run tests with coverage report
 make test-e2e   # Run E2E tests with mock providers
 ```
 
-### CI/CD & Deployment 🚀
+### CI/CD & Deployment [ROCKET]
 ```bash
 # Deploy to environments
 make deploy:staging          # Deploy to staging
@@ -155,7 +155,7 @@ pytest -k "test_webhook_notifications" -v        # Webhook testing
 
 **Test Coverage:**
 - Face restoration, face swap, and upscale workflows
-- Provider switching (ComfyUI ↔ RunPod)
+- Provider switching (ComfyUI <-> RunPod)
 - Idempotency and caching mechanisms
 - Retry logic and error handling
 - Security validation and input filtering
@@ -262,7 +262,7 @@ ENTITLEMENTS_DEFAULT_PLAN=free
 DEV_BILLING_MODE=mock  # Options: mock, live
 ```
 
-## 🚀 CI/CD & Deployment
+## [ROCKET] CI/CD & Deployment
 
 OneShot Face Swapper includes a complete CI/CD pipeline with GitHub Actions, staging/production environments, and safe deployment practices.
 
@@ -282,13 +282,13 @@ make rollback:production
 
 ### Pipeline Features
 
-- ✅ **Automated Testing**: Unit tests, E2E tests, and coverage reporting
-- ✅ **Multi-platform Builds**: Docker images for AMD64 and ARM64
-- ✅ **Staging/Production**: Separate environments with approval workflows
-- ✅ **Zero Downtime**: Blue-green deployments with health checks
-- ✅ **Auto Rollback**: Automatic rollback on deployment failures
-- ✅ **Smoke Tests**: Post-deployment validation with comprehensive checks
-- ✅ **Security**: Secrets management and environment isolation
+- [OK] **Automated Testing**: Unit tests, E2E tests, and coverage reporting
+- [OK] **Multi-platform Builds**: Docker images for AMD64 and ARM64
+- [OK] **Staging/Production**: Separate environments with approval workflows
+- [OK] **Zero Downtime**: Blue-green deployments with health checks
+- [OK] **Auto Rollback**: Automatic rollback on deployment failures
+- [OK] **Smoke Tests**: Post-deployment validation with comprehensive checks
+- [OK] **Security**: Secrets management and environment isolation
 
 ### Infrastructure
 
@@ -331,10 +331,10 @@ graph TB
 
 3. **Deploy**:
    ```bash
-   # Push to develop branch → triggers staging deployment
+   # Push to develop branch -> triggers staging deployment
    git push origin develop
    
-   # Push to main branch → triggers production deployment
+   # Push to main branch -> triggers production deployment
    git push origin main
    ```
 
@@ -373,7 +373,7 @@ Post-deployment validation includes:
 
 **Learn More**: See [CI/CD Deployment Guide](docs/ci-cd-deployment-guide.md) for complete setup instructions.
 
-## 📊 Monitoring & Alerts
+## [METRICS] Monitoring & Alerts
 
 OneShot Face Swapper includes comprehensive monitoring, tracing, and alerting capabilities for production-ready observability.
 
@@ -401,11 +401,11 @@ make monitor:test-alerts
 
 ### Monitoring Stack
 
-- ✅ **Sentry**: Exception tracking and performance monitoring
-- ✅ **Prometheus**: Metrics collection with custom job/provider metrics
-- ✅ **Grafana**: Visualization dashboards for performance and health
-- ✅ **Alertmanager**: Smart alerting with Slack/Email notifications
-- ✅ **Health Checks**: Enhanced `/readyz` with dependency timings
+- [OK] **Sentry**: Exception tracking and performance monitoring
+- [OK] **Prometheus**: Metrics collection with custom job/provider metrics
+- [OK] **Grafana**: Visualization dashboards for performance and health
+- [OK] **Alertmanager**: Smart alerting with Slack/Email notifications
+- [OK] **Health Checks**: Enhanced `/readyz` with dependency timings
 
 ### Key Metrics
 
@@ -489,14 +489,14 @@ graph LR
 slack_configs:
   - api_url: 'https://hooks.slack.com/services/YOUR/SLACK/WEBHOOK'
     channel: '#alerts-critical'
-    title: '🚨 Critical Alert'
+    title: '[ALERT] Critical Alert'
 ```
 
 **Email Notifications**:
 ```yaml
 email_configs:
   - to: 'oncall@yourdomain.com'
-    subject: '🚨 CRITICAL: {{ .CommonAnnotations.summary }}'
+    subject: '[ALERT] CRITICAL: {{ .CommonAnnotations.summary }}'
 ```
 
 ### Health Endpoints
@@ -1067,7 +1067,7 @@ done
 
 Expected progression:
 ```
-pending → running (10%) → running (50%) → running (90%) → succeeded (100%)
+pending -> running (10%) -> running (50%) -> running (90%) -> succeeded (100%)
 ```
 
 6. **Get results:**
@@ -1159,7 +1159,7 @@ curl -X POST "http://localhost:8000/api/v1/jobs" \
 
 2. **Expected behavior:**
    - Job should complete almost instantly (< 5 seconds)
-   - Status should go: `pending → succeeded`
+   - Status should go: `pending -> succeeded`
    - No actual GPU processing should occur
    - Result should be identical to previous job
 
@@ -1396,25 +1396,25 @@ curl http://localhost:8000/metrics
 ### Project Structure
 ```
 qoder-deneme/
-├── apps/
-│   ├── api/
-│   │   ├── main.py           # FastAPI application
-│   │   └── routers/          # API route handlers
-│   ├── core/
-│   │   ├── settings.py       # Configuration
-│   │   └── security.py       # Authentication
-│   ├── db/
-│   │   ├── models/           # Database models
-│   │   └── session.py        # Database session
-│   ├── services/             # Business logic
-│   └── worker/
-│       └── tasks.py          # Background tasks
-├── tests/                    # Test suite
-├── alembic/                  # Database migrations
-├── docker-compose.yml        # Docker services
-├── Dockerfile               # Container image
-├── Makefile                 # Development commands
-└── requirements.txt         # Python dependencies
+|--- apps/
+|   |--- api/
+|   |   |--- main.py           # FastAPI application
+|   |   `--- routers/          # API route handlers
+|   |--- core/
+|   |   |--- settings.py       # Configuration
+|   |   `--- security.py       # Authentication
+|   |--- db/
+|   |   |--- models/           # Database models
+|   |   `--- session.py        # Database session
+|   |--- services/             # Business logic
+|   `--- worker/
+|       `--- tasks.py          # Background tasks
+|--- tests/                    # Test suite
+|--- alembic/                  # Database migrations
+|--- docker-compose.yml        # Docker services
+|--- Dockerfile               # Container image
+|--- Makefile                 # Development commands
+`--- requirements.txt         # Python dependencies
 ```
 
 ### Adding New Features
@@ -1748,28 +1748,28 @@ Content-Type: application/json
 
 ```
 oneshot-backend/
-├── apps/
-│   ├── api/                 # FastAPI application
-│   │   ├── routers/         # API endpoints
-│   │   ├── main.py          # App configuration
-│   │   └── services.py      # Business logic
-│   ├── worker/              # Background processing
-│   │   ├── processors/      # AI processing modules
-│   │   ├── tasks.py         # Celery tasks
-│   │   └── main.py          # Worker entry point
-│   ├── core/                # Core utilities
-│   │   ├── config.py        # Configuration constants
-│   │   ├── settings.py      # Application settings
-│   │   ├── security.py      # Security utilities
-│   │   └── exceptions.py    # Custom exceptions
-│   └── db/                  # Database layer
-│       ├── models/          # SQLModel definitions
-│       ├── session.py       # Database session
-│       └── base.py          # CRUD operations
-├── alembic/                 # Database migrations
-├── requirements.txt         # Python dependencies
-├── main.py                  # Application entry point
-└── .env                     # Environment variables
+|--- apps/
+|   |--- api/                 # FastAPI application
+|   |   |--- routers/         # API endpoints
+|   |   |--- main.py          # App configuration
+|   |   `--- services.py      # Business logic
+|   |--- worker/              # Background processing
+|   |   |--- processors/      # AI processing modules
+|   |   |--- tasks.py         # Celery tasks
+|   |   `--- main.py          # Worker entry point
+|   |--- core/                # Core utilities
+|   |   |--- config.py        # Configuration constants
+|   |   |--- settings.py      # Application settings
+|   |   |--- security.py      # Security utilities
+|   |   `--- exceptions.py    # Custom exceptions
+|   `--- db/                  # Database layer
+|       |--- models/          # SQLModel definitions
+|       |--- session.py       # Database session
+|       `--- base.py          # CRUD operations
+|--- alembic/                 # Database migrations
+|--- requirements.txt         # Python dependencies
+|--- main.py                  # Application entry point
+`--- .env                     # Environment variables
 ```
 
 ### Adding New Features
@@ -1844,7 +1844,7 @@ alembic downgrade -1
 - CORS configuration
 - Environment variable protection
 
-## 🔒 Privacy & Content Safety
+## [LOCKED] Privacy & Content Safety
 
 The OneShot Face Swapper system includes comprehensive privacy and content safety features to ensure responsible AI usage and protect user data.
 
@@ -1952,22 +1952,22 @@ make retention:test
 ### Privacy Policies by Plan
 
 #### Free Plan
-- ✅ NSFW content strictly blocked
-- ✅ Watermarks on all outputs
-- ✅ Full consent requirements for face swap
-- ❌ No commercial use
+- [OK] NSFW content strictly blocked
+- [OK] Watermarks on all outputs
+- [OK] Full consent requirements for face swap
+- [FAIL] No commercial use
 
 #### Pro Plan  
-- ⚠️ NSFW content flagged but allowed
-- ✅ Optional watermarks (disabled by default)
-- ✅ Standard consent requirements
-- ✅ Commercial use permitted
+- [WARN] NSFW content flagged but allowed
+- [OK] Optional watermarks (disabled by default)
+- [OK] Standard consent requirements
+- [OK] Commercial use permitted
 
 #### Premium Plan
-- ⚠️ Minimal content restrictions
-- ✅ Full watermark customization
-- ✅ Minimal consent requirements
-- ✅ Full commercial rights
+- [WARN] Minimal content restrictions
+- [OK] Full watermark customization
+- [OK] Minimal consent requirements
+- [OK] Full commercial rights
 
 ## Support
 

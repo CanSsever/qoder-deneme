@@ -6,7 +6,7 @@ from typing import Optional
 import jwt
 from fastapi import Depends, HTTPException, status, Header
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-from jwt import decode as jwt_decode, InvalidTokenError
+from jwt import InvalidTokenError
 from apps.core.settings import settings
 from apps.core.supabase_client import supabase_client
 
@@ -37,8 +37,11 @@ class SecurityUtils:
     def verify_supabase_token(token: str) -> Optional[dict]:
         """Verify and decode Supabase JWT token."""
         try:
+            if not token:
+                return None
+            
             # Decode token using Supabase JWT secret
-            payload = jwt_decode(
+            payload = jwt.decode(
                 token,
                 settings.supabase_jwt_secret,
                 algorithms=["HS256"],
