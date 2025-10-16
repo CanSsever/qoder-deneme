@@ -10,7 +10,7 @@
     "reset:metro": "expo start -c",
     "doctor": "expo doctor",
     "check:api": "node scripts/check-api.js",
-    "prestart": "node scripts/check-api.js || echo \"⚠️  API sağlık kontrolü başarısız, yine de başlatılıyor...\"",
+    "prestart": "node scripts/check-api.js || echo \"API health check failed; starting anyway...\"",
     "dev": "npm run check:api && expo start",
     "validate:fix": "node scripts/validate-fix.js"
   },
@@ -22,7 +22,7 @@
     "expo-constants": "~18.0.9",
     "expo-image-picker": "~17.0.8",
     "expo-status-bar": "~3.0.8",
-    "oneshot-sdk": "file:../oneshot-sdk/oneshot-sdk-1.0.0.tgz",
+    "oneshot-sdk": "file:../oneshot-sdk",
     "react": "19.1.0",
     "react-native": "0.81.4",
     "react-native-gesture-handler": "~2.28.0",

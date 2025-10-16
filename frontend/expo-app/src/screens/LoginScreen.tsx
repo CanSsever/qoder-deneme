@@ -9,13 +9,13 @@ import {
   KeyboardAvoidingView,
   Platform,
   ActivityIndicator,
-  Modal,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { StackScreenProps } from '@react-navigation/stack';
 import { RootStackParamList } from '../types/navigation';
 import { oneShotClient } from '../utils/client';
-import NetworkDiagnostics from '../utils/networkDiagnostics';
+import NetworkDiagnosticsModal from '../components/NetworkDiagnosticsModal';
+import { ConnectionStatus } from 'oneshot-sdk';
 
 type Props = StackScreenProps<RootStackParamList, 'Login'>;
 
@@ -26,12 +26,26 @@ export default function LoginScreen({ navigation }: Props) {
   const [loadingStatus, setLoadingStatus] = useState('');
   const [retryCount, setRetryCount] = useState(0);
   const [showDiagnostics, setShowDiagnostics] = useState(false);
-  const [networkInfo, setNetworkInfo] = useState<any>(null);
+  const [connectionStatus, setConnectionStatus] = useState<ConnectionStatus>(ConnectionStatus.UNKNOWN);
+  const [checkingConnection, setCheckingConnection] = useState(false);
 
   useEffect(() => {
-    // Get network information on component mount
-    setNetworkInfo(NetworkDiagnostics.getNetworkInfo());
+    // Perform initial connection check when screen mounts
+    performPreflightCheck();
   }, []);
+
+  const performPreflightCheck = async () => {
+    setCheckingConnection(true);
+    try {
+      const result = await oneShotClient.quickPreflightCheck();
+      setConnectionStatus(result.status);
+    } catch (error) {
+      console.error('Pre-flight check failed:', error);
+      setConnectionStatus(ConnectionStatus.DISCONNECTED);
+    } finally {
+      setCheckingConnection(false);
+    }
+  };
 
   const handleLogin = async () => {
     if (!email.trim() || !password.trim()) {
@@ -44,7 +58,13 @@ export default function LoginScreen({ navigation }: Props) {
     setRetryCount(0);
     
     try {
-      const response = await oneShotClient.login(email.trim(), password);
+      const response = await oneShotClient.login(email.trim(), password, {
+        onProgress: (message) => {
+          setLoadingStatus(message);
+        },
+        maxAttempts: 10,
+        skipPreflight: false // Enable pre-flight check
+      });
       
       setLoadingStatus('Login successful!');
       
@@ -68,19 +88,18 @@ export default function LoginScreen({ navigation }: Props) {
       ];
       
       // Enhanced error handling with specific guidance
-      if (error.message.includes('Unable to reach server')) {
+      if (error.message.includes('not reachable') || error.message.includes('Unable to reach server')) {
         title = 'Connection Problem';
-        message = 'Cannot connect to the server. Please check your internet connection.';
+        message = error.message || 'Cannot connect to the server. Please check your internet connection.';
         actions = [
           {
-            text: 'Network Info',
+            text: 'Network Diagnostics',
             onPress: () => setShowDiagnostics(true)
           },
           {
             text: 'Retry',
             onPress: () => handleLogin()
           },
-          { text: 'Demo Mode', onPress: handleDemoLogin },
           { text: 'Cancel', style: 'cancel' }
         ];
       } else if (error.message.includes('timeout')) {
@@ -88,10 +107,13 @@ export default function LoginScreen({ navigation }: Props) {
         message = 'The server is taking too long to respond. This might be a network issue.';
         actions = [
           {
+            text: 'Network Diagnostics',
+            onPress: () => setShowDiagnostics(true)
+          },
+          {
             text: 'Retry',
             onPress: () => handleLogin()
           },
-          { text: 'Demo Mode', onPress: handleDemoLogin },
           { text: 'Cancel', style: 'cancel' }
         ];
       } else if (error.message.includes('Invalid email or password')) {
@@ -104,45 +126,98 @@ export default function LoginScreen({ navigation }: Props) {
     } finally {
       setLoading(false);
       setLoadingStatus('');
+      // Refresh connection status after login attempt
+      performPreflightCheck();
     }
   };
 
   const testConnectivity = async () => {
+    setCheckingConnection(true);
     setLoadingStatus('Testing connection...');
     
-    const result = await NetworkDiagnostics.testConnectivity();
-    
-    if (result.success) {
+    try {
+      const result = await oneShotClient.preflightCheck({
+        timeout: 5000,
+        retryOnFailure: true
+      });
+      
+      setConnectionStatus(result.status);
+      
+      if (result.backendReachable) {
+        Alert.alert(
+          'Connection Test Successful',
+          `Server is reachable. Response time: ${result.latency}ms\n\n${result.recommendation}`,
+          [
+            {
+              text: 'Try Login Again',
+              onPress: () => handleLogin()
+            },
+            { text: 'OK' }
+          ]
+        );
+      } else {
+        Alert.alert(
+          'Connection Test Failed',
+          `Could not reach server: ${result.error}\n\n${result.recommendation}`,
+          [
+            {
+              text: 'Show Diagnostics',
+              onPress: () => setShowDiagnostics(true)
+            },
+            { text: 'OK' }
+          ]
+        );
+      }
+    } catch (error: any) {
+      setConnectionStatus(ConnectionStatus.DISCONNECTED);
       Alert.alert(
-        'Connection Test Successful',
-        `Server is reachable. Response time: ${result.latency}ms`,
-        [
-          {
-            text: 'Try Login Again',
-            onPress: () => handleLogin()
-          },
-          { text: 'OK' }
-        ]
+        'Connection Test Error',
+        error.message || 'Failed to test connection'
       );
-    } else {
-      Alert.alert(
-        'Connection Test Failed',
-        `Could not reach server: ${result.error}`,
-        [
-          {
-            text: 'Show Diagnostics',
-            onPress: () => setShowDiagnostics(true)
-          },
-          { text: 'OK' }
-        ]
-      );
+    } finally {
+      setCheckingConnection(false);
+      setLoadingStatus('');
     }
-    
-    setLoadingStatus('');
+  };
+
+  const getConnectionStatusDisplay = () => {
+    if (checkingConnection) {
+      return {
+        icon: '◌',
+        text: 'Checking connection...',
+        color: '#3B82F6'
+      };
+    }
+
+    switch (connectionStatus) {
+      case ConnectionStatus.CONNECTED:
+        return {
+          icon: '●',
+          text: 'Connected to server',
+          color: '#10B981'
+        };
+      case ConnectionStatus.DEGRADED:
+        return {
+          icon: '◐',
+          text: 'Connection is slow',
+          color: '#F59E0B'
+        };
+      case ConnectionStatus.DISCONNECTED:
+        return {
+          icon: '○',
+          text: 'Server not reachable',
+          color: '#EF4444'
+        };
+      default:
+        return {
+          icon: '?',
+          text: 'Connection status unknown',
+          color: '#6B7280'
+        };
+    }
   };
 
   const handleDemoLogin = () => {
-    // For demo purposes - bypass login
     Alert.alert(
       'Demo Mode',
       'This will use demo mode without authentication. Some features may not work.',
@@ -170,6 +245,16 @@ export default function LoginScreen({ navigation }: Props) {
           <View style={styles.header}>
             <Text style={styles.title}>OneShot</Text>
             <Text style={styles.subtitle}>AI Face Swapper</Text>
+            
+            {/* Connection Status Indicator */}
+            <View style={styles.connectionStatus}>
+              <Text style={[styles.statusIcon, { color: getConnectionStatusDisplay().color }]}>
+                {getConnectionStatusDisplay().icon}
+              </Text>
+              <Text style={[styles.statusText, { color: getConnectionStatusDisplay().color }]}>
+                {getConnectionStatusDisplay().text}
+              </Text>
+            </View>
           </View>
 
           {/* Login Form */}
@@ -225,10 +310,18 @@ export default function LoginScreen({ navigation }: Props) {
 
             <TouchableOpacity
               style={styles.diagnosticsButton}
-              onPress={testConnectivity}
+              onPress={() => setShowDiagnostics(true)}
               disabled={loading}
             >
-              <Text style={styles.diagnosticsButtonText}>Test Connection</Text>
+              <Text style={styles.diagnosticsButtonText}>Network Diagnostics</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={styles.testButton}
+              onPress={testConnectivity}
+              disabled={loading || checkingConnection}
+            >
+              <Text style={styles.testButtonText}>Test Connection</Text>
             </TouchableOpacity>
           </View>
 
@@ -249,54 +342,10 @@ export default function LoginScreen({ navigation }: Props) {
       </KeyboardAvoidingView>
 
       {/* Network Diagnostics Modal */}
-      <Modal
+      <NetworkDiagnosticsModal
         visible={showDiagnostics}
-        animationType="slide"
-        presentationStyle="pageSheet"
-      >
-        <SafeAreaView style={styles.modalContainer}>
-          <View style={styles.modalHeader}>
-            <Text style={styles.modalTitle}>Network Diagnostics</Text>
-            <TouchableOpacity
-              style={styles.closeButton}
-              onPress={() => setShowDiagnostics(false)}
-            >
-              <Text style={styles.closeButtonText}>Close</Text>
-            </TouchableOpacity>
-          </View>
-          
-          <View style={styles.modalContent}>
-            <View style={styles.diagnosticItem}>
-              <Text style={styles.diagnosticLabel}>API URL:</Text>
-              <Text style={styles.diagnosticValue}>{networkInfo?.apiUrl}</Text>
-            </View>
-            
-            <View style={styles.diagnosticItem}>
-              <Text style={styles.diagnosticLabel}>Timeout:</Text>
-              <Text style={styles.diagnosticValue}>{networkInfo?.timeout}ms</Text>
-            </View>
-            
-            <View style={styles.diagnosticItem}>
-              <Text style={styles.diagnosticLabel}>Retry Attempts:</Text>
-              <Text style={styles.diagnosticValue}>{networkInfo?.retryAttempts}</Text>
-            </View>
-            
-            <View style={styles.diagnosticItem}>
-              <Text style={styles.diagnosticLabel}>Online Status:</Text>
-              <Text style={[styles.diagnosticValue, networkInfo?.online ? styles.online : styles.offline]}>
-                {networkInfo?.online ? 'Online' : 'Offline'}
-              </Text>
-            </View>
-            
-            <TouchableOpacity
-              style={styles.testButton}
-              onPress={testConnectivity}
-            >
-              <Text style={styles.testButtonText}>Run Connection Test</Text>
-            </TouchableOpacity>
-          </View>
-        </SafeAreaView>
-      </Modal>
+        onClose={() => setShowDiagnostics(false)}
+      />
     </SafeAreaView>
   );
 }
@@ -327,6 +376,24 @@ const styles = StyleSheet.create({
   subtitle: {
     fontSize: 16,
     color: '#6B7280',
+    marginBottom: 16,
+  },
+  connectionStatus: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#F3F4F6',
+    paddingVertical: 8,
+    paddingHorizontal: 16,
+    borderRadius: 20,
+    marginTop: 12,
+  },
+  statusIcon: {
+    fontSize: 16,
+    marginRight: 8,
+  },
+  statusText: {
+    fontSize: 13,
+    fontWeight: '500',
   },
   form: {
     marginBottom: 32,
@@ -391,6 +458,19 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: '500',
   },
+  testButton: {
+    borderWidth: 1,
+    borderColor: '#2563EB',
+    borderRadius: 8,
+    paddingVertical: 12,
+    alignItems: 'center',
+    marginTop: 8,
+  },
+  testButtonText: {
+    color: '#2563EB',
+    fontSize: 14,
+    fontWeight: '500',
+  },
   footer: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -408,77 +488,6 @@ const styles = StyleSheet.create({
   registerLinkText: {
     fontSize: 14,
     color: '#2563EB',
-    fontWeight: '600',
-  },
-  // Modal styles
-  modalContainer: {
-    flex: 1,
-    backgroundColor: '#F9FAFB',
-  },
-  modalHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingHorizontal: 24,
-    paddingVertical: 16,
-    borderBottomWidth: 1,
-    borderBottomColor: '#E5E7EB',
-  },
-  modalTitle: {
-    fontSize: 18,
-    fontWeight: '600',
-    color: '#1F2937',
-  },
-  closeButton: {
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-  },
-  closeButtonText: {
-    color: '#2563EB',
-    fontSize: 16,
-    fontWeight: '500',
-  },
-  modalContent: {
-    flex: 1,
-    paddingHorizontal: 24,
-    paddingTop: 24,
-  },
-  diagnosticItem: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingVertical: 12,
-    borderBottomWidth: 1,
-    borderBottomColor: '#F3F4F6',
-  },
-  diagnosticLabel: {
-    fontSize: 14,
-    fontWeight: '500',
-    color: '#6B7280',
-    flex: 1,
-  },
-  diagnosticValue: {
-    fontSize: 14,
-    color: '#1F2937',
-    flex: 2,
-    textAlign: 'right',
-  },
-  online: {
-    color: '#10B981',
-  },
-  offline: {
-    color: '#EF4444',
-  },
-  testButton: {
-    backgroundColor: '#2563EB',
-    borderRadius: 8,
-    paddingVertical: 16,
-    alignItems: 'center',
-    marginTop: 32,
-  },
-  testButtonText: {
-    color: '#FFFFFF',
-    fontSize: 16,
     fontWeight: '600',
   },
 });

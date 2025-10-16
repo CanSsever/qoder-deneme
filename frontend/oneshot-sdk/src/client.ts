@@ -4,6 +4,9 @@
 import { FetchHttpClient } from './http-client';
 import { ErrorClassifier, UserFeedbackGenerator, ClassifiedError } from './error-classification';
 import { NetworkQuality } from './network-quality';
+import { PreflightValidator, ConnectionStatus, PreflightResult } from './preflight-validator';
+import { ServiceDiscovery, DiscoveryResult, PlatformInfo } from './service-discovery';
+import { AdaptiveTimeoutCalibrator } from './adaptive-timeout';
 import {
   SdkConfig,
   LoginRequest,
@@ -25,14 +28,30 @@ export class OneShotClient {
   private isAuthenticated = false;
   private authAttempts = 0;
   private lastAuthError?: ClassifiedError;
+  private preflightValidator: PreflightValidator;
+  private serviceDiscovery?: ServiceDiscovery;
+  private timeoutCalibrator: AdaptiveTimeoutCalibrator;
+  private baseUrl: string;
 
   constructor(config: SdkConfig) {
+    this.baseUrl = config.baseUrl;
+    
+    // Initialize adaptive timeout calibrator
+    this.timeoutCalibrator = new AdaptiveTimeoutCalibrator({
+      platformDefault: config.timeout || 30000,
+      persistenceEnabled: true
+    });
+    
+    // Initialize HTTP client with calibrated timeout
     this.httpClient = new FetchHttpClient(
       config.baseUrl,
-      config.timeout,
+      this.timeoutCalibrator.getCurrentTimeout(),
       config.retryAttempts,
       config.retryDelay
     );
+    
+    // Initialize pre-flight validator
+    this.preflightValidator = new PreflightValidator(config.baseUrl);
 
     // Set API key if provided
     if (config.apiKey) {
@@ -49,6 +68,58 @@ export class OneShotClient {
   }
 
   /**
+   * Perform pre-flight connection validation
+   */
+  async preflightCheck(options?: { timeout?: number; retryOnFailure?: boolean }): Promise<PreflightResult> {
+    return this.preflightValidator.validate(options);
+  }
+
+  /**
+   * Quick pre-flight check without retries
+   */
+  async quickPreflightCheck(): Promise<PreflightResult> {
+    return this.preflightValidator.quickCheck();
+  }
+
+  /**
+   * Get connection status
+   */
+  getConnectionStatus(): ConnectionStatus {
+    const lastResult = this.preflightValidator.getLastResult();
+    return lastResult?.status || ConnectionStatus.UNKNOWN;
+  }
+
+  /**
+   * Check if backend is reachable
+   */
+  isBackendReachable(): boolean {
+    return this.preflightValidator.isBackendReachable();
+  }
+
+  /**
+   * Initialize service discovery
+   */
+  initServiceDiscovery(platform?: PlatformInfo, explicitUrl?: string): void {
+    this.serviceDiscovery = new ServiceDiscovery({
+      explicitUrl,
+      platform,
+      port: 8000,
+      enableNetworkScan: platform?.isPhysicalDevice || false,
+      cacheEnabled: true
+    });
+  }
+
+  /**
+   * Discover backend service URL
+   */
+  async discoverService(): Promise<DiscoveryResult> {
+    if (!this.serviceDiscovery) {
+      throw new Error('Service discovery not initialized. Call initServiceDiscovery() first.');
+    }
+    return this.serviceDiscovery.discover();
+  }
+
+  /**
    * Check backend readiness (comprehensive health check)
    */
   async readinessCheck(): Promise<any> {
@@ -61,22 +132,34 @@ export class OneShotClient {
   async login(email: string, password: string, options?: {
     onProgress?: (message: string) => void;
     maxAttempts?: number;
+    skipPreflight?: boolean;
   }): Promise<UserResponse> {
     const maxAttempts = options?.maxAttempts || 10;
     this.authAttempts = 0;
     
-    // First, verify backend connectivity with progress feedback
-    if (options?.onProgress) {
-      options.onProgress("Checking server connectivity...");
-    }
-    
-    try {
-      await this.healthCheck();
-    } catch (healthError: any) {
-      const networkQuality = await this.getNetworkQuality();
-      const classification = ErrorClassifier.classifyError(healthError, networkQuality.quality);
+    // Pre-flight check: verify backend connectivity before attempting login
+    if (!options?.skipPreflight) {
+      if (options?.onProgress) {
+        options.onProgress("Checking server connectivity...");
+      }
       
-      throw new ClassifiedError(healthError, classification);
+      const preflightResult = await this.preflightCheck({
+        timeout: 5000,
+        retryOnFailure: true
+      });
+      
+      if (!preflightResult.backendReachable) {
+        throw new Error(
+          `Backend is not reachable: ${preflightResult.error || 'Unknown error'}. ${preflightResult.recommendation || ''}`
+        );
+      }
+      
+      if (preflightResult.status === ConnectionStatus.DEGRADED) {
+        console.warn('Connection is degraded:', preflightResult.recommendation);
+        if (options?.onProgress) {
+          options.onProgress("Connection is slow, this may take longer than usual...");
+        }
+      }
     }
 
     const request: LoginRequest = { email, password };
@@ -94,18 +177,42 @@ export class OneShotClient {
         options.onProgress(progressMessage);
       }
       
-      const response = await this.httpClient.post<UserResponse>(
-        '/api/v1/auth/login',
-        request
-      );
+      const startTime = performance.now();
+      
+      try {
+        const response = await this.httpClient.post<UserResponse>(
+          '/api/v1/auth/login',
+          request
+        );
+        
+        const duration = performance.now() - startTime;
+        
+        // Record successful request for timeout calibration
+        this.timeoutCalibrator.recordRequest({
+          duration,
+          success: true,
+          timestamp: Date.now()
+        });
 
-      // Store the token for future requests
-      this.httpClient.setBearerToken(response.access_token);
-      this.isAuthenticated = true;
-      this.authAttempts = 0;
-      this.lastAuthError = undefined;
+        // Store the token for future requests
+        this.httpClient.setBearerToken(response.access_token);
+        this.isAuthenticated = true;
+        this.authAttempts = 0;
+        this.lastAuthError = undefined;
 
-      return response;
+        return response;
+      } catch (error) {
+        const duration = performance.now() - startTime;
+        
+        // Record failed request for timeout calibration
+        this.timeoutCalibrator.recordRequest({
+          duration,
+          success: false,
+          timestamp: Date.now()
+        });
+        
+        throw error;
+      }
     }, maxAttempts);
   }
 
