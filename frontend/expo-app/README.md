@@ -19,6 +19,40 @@ A complete mobile app example demonstrating integration with the OneShot Face Sw
 - Expo CLI: `npm install -g @expo/cli`
 - OneShot backend running (see main README)
 
+### Hızlı Başlatma (Development)
+
+1. **Backend'i başlatın:**
+   ```bash
+   cd backend
+   docker compose up -d
+   # veya
+   uvicorn apps.api.main:app --host 0.0.0.0 --port 8000
+   ```
+
+2. **Sağlık kontrolü yapın:**
+   ```bash
+   cd frontend/expo-app
+   npm run check:api
+   ```
+   ✅ API'nin çalıştığını doğrulayın.
+
+3. **Metro bundler'ı sıfırlayın (ilk kez):**
+   ```bash
+   npm run reset:metro
+   ```
+
+4. **Uygulamayı başlatın:**
+   ```bash
+   npm run dev
+   # veya
+   npm start
+   ```
+
+5. **Cihazınızda çalıştırın:**
+   - Android Emulator: `a` tuşuna basın
+   - iOS Simulator: `i` tuşuna basın  
+   - Fiziksel cihaz: Expo Go ile QR kodu tarayın
+
 ### Installation
 
 1. **Install dependencies:**
@@ -58,6 +92,27 @@ EXPO_PUBLIC_API_TIMEOUT=30000
 
 > ℹ️ The Expo config now autodetects your current LAN IP. Only set `EXPO_PUBLIC_API_URL`
 > when you need a custom domain (for example, an ngrok/cloudflared tunnel or staging backend).
+
+### Platform URL Mapping Table
+
+The app automatically selects the correct API URL based on your platform:
+
+| Platform | Device Type | URL Pattern | Example |
+|----------|------------|-------------|----------|
+| Android | Emulator | `http://10.0.2.2:8000` | Android AVD uses 10.0.2.2 to reach host's localhost |
+| Android | Physical Device | `http://<LAN_IP>:8000` | `http://192.168.1.50:8000` (same Wi-Fi network) |
+| iOS | Simulator | `http://localhost:8000` | iOS Simulator can use localhost directly |
+| iOS | Physical Device | `http://<LAN_IP>:8000` | `http://192.168.1.50:8000` (same Wi-Fi network) |
+| Web | Browser | `http://localhost:8000` | Development server |
+
+**Important Notes:**
+- 📶 **Physical devices** must be on the **same Wi-Fi network** as your development machine
+- 🏠 Find your LAN IP:
+  - **macOS/Linux**: Run `ifconfig | grep "inet "` or `ip addr show`
+  - **Windows**: Run `ipconfig` and look for "IPv4 Address"
+- 🔥 **Firewall**: Ensure port 8000 is allowed in your firewall settings
+- ⚡ **Timeout**: Emulators use 15s timeout, physical devices use 45s (configurable)
+- 🔄 **Retry**: Emulators retry 3 times, physical devices retry up to 10 times
 
 ## App Structure
 
@@ -369,12 +424,48 @@ EXPO_PUBLIC_API_TIMEOUT=30000
 
 ## Troubleshooting
 
+### Connection Timeout Error: `[OneShotError: Network request timed out]`
+
+If you encounter this error during login or registration:
+
+1. **Verify backend is running:**
+   ```bash
+   npm run check:api
+   ```
+   This tests connectivity to your backend.
+
+2. **Check platform-specific URL:**
+   - **Android Emulator**: Should use `http://10.0.2.2:8000`
+   - **iOS Simulator**: Should use `http://localhost:8000`
+   - **Physical Device**: Should use your LAN IP (e.g., `http://192.168.1.50:8000`)
+
+3. **Update LAN IP in `.env.development`:**
+   ```env
+   EXPO_PUBLIC_API_URL_LAN=http://YOUR_LAN_IP:8000
+   ```
+   Find your LAN IP:
+   - Windows: `ipconfig`
+   - macOS/Linux: `ifconfig` or `ip addr`
+
+4. **Check firewall:**
+   - Ensure port 8000 is allowed
+   - Temporarily disable firewall to test
+
+5. **Restart Metro bundler with cache clear:**
+   ```bash
+   npm run reset:metro
+   ```
+
+6. **Test from browser:**
+   Open `http://localhost:8000/healthz` (or your LAN IP) in a browser to verify backend is accessible.
+
 ### Common Issues
 
 1. **Network Errors:**
    - Check `EXPO_PUBLIC_API_URL` in `.env` (or let auto-detect handle it)
    - Verify backend is running
    - Check device network connectivity
+   - Run `npm run check:api` for diagnostics
 
 2. **Image Upload Fails:**
    - Verify file size < 20MB
@@ -390,6 +481,7 @@ EXPO_PUBLIC_API_TIMEOUT=30000
    - Verify credentials
    - Check JWT token expiry
    - Ensure backend auth service is running
+   - Look for specific error messages in Network Info modal
 
 ### Debug Mode
 

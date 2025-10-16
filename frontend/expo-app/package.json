@@ -10,7 +10,9 @@
     "reset:metro": "expo start -c",
     "doctor": "expo doctor",
     "check:api": "node scripts/check-api.js",
-    "prestart": "node scripts/check-api.js"
+    "prestart": "node scripts/check-api.js || echo \"⚠️  API sağlık kontrolü başarısız, yine de başlatılıyor...\"",
+    "dev": "npm run check:api && expo start",
+    "validate:fix": "node scripts/validate-fix.js"
   },
   "dependencies": {
     "@expo/vector-icons": "^15.0.2",

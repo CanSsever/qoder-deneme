@@ -1,13 +1,21 @@
 /**
  * API connectivity check script
  * Usage: node scripts/check-api.js
+ * 
+ * Performs pre-flight health checks before starting the app
  */
 
-const fetch = require('node-fetch');
-const Constants = require('expo-constants');
+// Node 22+ has built-in fetch
 
-// Load API configuration
-const apiUrl = process.env.EXPO_PUBLIC_API_URL || 'http://192.168.100.10:8000';
+// Load API configuration from environment
+const apiUrl = 
+  process.env.EXPO_PUBLIC_API_URL_ANDROID ||
+  process.env.EXPO_PUBLIC_API_URL_IOS ||
+  process.env.EXPO_PUBLIC_API_URL_LAN ||
+  process.env.EXPO_PUBLIC_API_URL_DEV ||
+  process.env.EXPO_PUBLIC_API_URL ||
+  'http://localhost:8000';
+
 const timeout = parseInt(process.env.EXPO_PUBLIC_API_TIMEOUT || '5000', 10);
 
 console.log('🔍 Checking API connectivity...');
