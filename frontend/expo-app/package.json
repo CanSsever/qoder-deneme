@@ -10,8 +10,14 @@
     "reset:metro": "expo start -c",
     "doctor": "expo doctor",
     "check:api": "node scripts/check-api.js",
-    "prestart": "node scripts/check-api.js || echo \"API health check failed; starting anyway...\"",
-    "dev": "npm run check:api && expo start",
+    "verify:sdk": "node scripts/verify-sdk.js",
+    "setup:dev": "node scripts/setup-dev.js",
+    "validate:metro-fix": "node scripts/validate-metro-fix.js",
+    "prestart": "node scripts/verify-sdk.js && node scripts/check-api.js || echo \"Pre-flight checks completed with warnings\"",
+    "dev": "npm run verify:sdk && npm run check:api && expo start",
+    "dev:tunnel": "npm run verify:sdk && npm run check:api && expo start --tunnel",
+    "dev:lan": "npm run verify:sdk && npm run check:api && expo start --lan",
+    "build:sdk": "cd ../oneshot-sdk && npm install && npm run build",
     "validate:fix": "node scripts/validate-fix.js"
   },
   "dependencies": {
